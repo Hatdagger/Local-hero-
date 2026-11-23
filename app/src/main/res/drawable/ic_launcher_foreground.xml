@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Gold music note inside a shield: the "hero" of your local library. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="108" android:viewportHeight="108">
+    <path android:fillColor="#00000000" android:strokeColor="#FFB547" android:strokeWidth="3.5"
+        android:pathData="M54,26 L76,34 L76,52 C76,66 66,76 54,82 C42,76 32,66 32,52 L32,34 Z" />
+    <path android:fillColor="#FFB547"
+        android:pathData="M60,38 L60,60 C60,64.4 56.4,68 52,68 C47.6,68 45,65.5 45,62.5 C45,59.2 48,56.5 52,56.5 C53.6,56.5 55,57 56,57.6 L56,40.5 L66,38 L66,43 L60,44.5 Z" />
+</vector>
