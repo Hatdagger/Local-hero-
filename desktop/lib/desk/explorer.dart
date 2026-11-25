@@ -37,6 +37,7 @@ DeskWindow explorerWindow({String? path}) {
     icon: start == kRecyclePath ? Icons.delete_outline : Icons.folder_open,
     size: const Size(760, 500),
     minSize: const Size(340, 220),
+    reopen: 'explorer|$start',
     content: (c, w) => _Explorer(w: w, start: start),
   );
 }
@@ -389,6 +390,7 @@ class _ExplorerState extends State<_Explorer> {
       _fwd.clear();
     }
     _path = path;
+    widget.w.reopen = 'explorer|$path';
     _cursor = -1;
     _renaming = null;
     if (_scroll.hasClients) _scroll.jumpTo(0);
@@ -2072,6 +2074,7 @@ DeskWindow pictureWindow(String path) => DeskWindow(
       icon: Icons.image,
       size: const Size(640, 480),
       minSize: const Size(260, 200),
+      reopen: 'picture|$path',
       content: (c, w) => _PictureViewer(w: w, path: path),
     );
 
@@ -2119,6 +2122,7 @@ class _PictureViewerState extends State<_PictureViewer> {
       _path = _all[((i + d) % n + n) % n];
       _tc.value = Matrix4.identity();
     });
+    widget.w.reopen = 'picture|$_path';
     context.read<WindowManager>().setTitle(widget.w.id, '${baseName(_path)} - Picture Viewer');
   }
 

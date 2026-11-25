@@ -20,7 +20,12 @@ class DeskWindow {
     this.beforeClose,
     this.alwaysOnTop = false,
     this.dockable = false,
+    this.reopen,
   }) : rect = Offset.zero & size;
+
+  /// How to open this window again after the desktop restarts, e.g.
+  /// "explorer|/storage/emulated/0/Music" (see Desk.reopen). Null: don't.
+  String? reopen;
 
   final String id;
   String title;
@@ -57,6 +62,13 @@ class DeskWindow {
 
   /// Remembers which field inside the window had the keyboard.
   final FocusScopeNode focus = FocusScopeNode(debugLabel: 'window');
+}
+
+/// A window's last place and size.
+class SavedBounds {
+  final Rect rect;
+  final bool maximized;
+  const SavedBounds(this.rect, this.maximized);
 }
 
 enum KbMode { none, move, size }
@@ -97,6 +109,33 @@ class WindowManager extends ChangeNotifier {
 
   List<String>? _minimizedAll;
   int _cascade = 0;
+
+  /// Last size and place of each kind of window (see [layoutKey]), so a
+  /// window opens where it was last time. Kept by DeskSession.
+  final Map<String, SavedBounds> savedBounds = {};
+
+  /// Same kind of window for remembering its place: "explorer:3" -> "explorer".
+  static String layoutKey(String id) => id.replaceFirst(RegExp(r':\d+$'), '');
+
+  /// Notes where [w] is now, for the next time this kind of window opens.
+  void rememberBounds(DeskWindow w) {
+    if (!w.resizable || w.dock != DockSide.none) return;
+    savedBounds[layoutKey(w.id)] = SavedBounds(w.rect, w.maximized);
+  }
+
+  /// Puts a window that was open before a restart back where it was.
+  void placeRestored(DeskWindow w, Rect r, {bool maximized = false, bool minimized = false}) {
+    if (w.resizable) {
+      final size = Size(math.max(w.minSize.width, math.min(r.width, desk.width)),
+          math.max(w.minSize.height, math.min(r.height, desk.height)));
+      w.rect = _fit(r.topLeft & size);
+    } else {
+      w.rect = _fit(r.topLeft & w.rect.size);
+    }
+    w.maximized = maximized && w.canMaximize && w.dock == DockSide.none;
+    notifyListeners();
+    if (minimized) minimize(w.id);
+  }
 
   /// Bottom to top, with always-on-top windows above the rest.
   List<DeskWindow> get zOrder =>
@@ -209,10 +248,22 @@ class WindowManager extends ChangeNotifier {
       }
       return existing;
     }
-    final size = Size(math.min(w.rect.width, desk.width), math.min(w.rect.height, desk.height));
+    var size = Size(math.min(w.rect.width, desk.width), math.min(w.rect.height, desk.height));
     Offset pos;
+    final saved = w.resizable ? savedBounds[layoutKey(w.id)] : null;
     if (at != null) {
       pos = at;
+    } else if (saved != null) {
+      // Where this kind of window was last time (a step further down if
+      // another one of the same kind is already sitting there).
+      size = Size(math.max(w.minSize.width, math.min(saved.rect.width, desk.width)),
+          math.max(w.minSize.height, math.min(saved.rect.height, desk.height)));
+      pos = saved.rect.topLeft;
+      final key = layoutKey(w.id);
+      for (var i = 0; i < 8 && _z.any((o) => layoutKey(o.id) == key && (o.rect.topLeft - pos).distance < 4); i++) {
+        pos += const Offset(26, 26);
+      }
+      if (saved.maximized && w.canMaximize) w.maximized = true;
     } else {
       final step = 26.0 * (_cascade % 8);
       _cascade++;
@@ -243,6 +294,7 @@ class WindowManager extends ChangeNotifier {
       if (activeId != id) focus(id);
       return;
     }
+    rememberBounds(w);
     _z.remove(w);
     _opened.remove(w);
     _mru.remove(id);

@@ -404,6 +404,7 @@ DeskWindow browserWindow({String? url}) {
     icon: Icons.public,
     size: const Size(1000, 680),
     minSize: const Size(420, 300),
+    reopen: 'browser|${url ?? ''}',
     content: (c, w) => _Browser(w: w, startUrl: url),
   );
 }
@@ -572,6 +573,7 @@ class _BrowserState extends State<_Browser> {
   }
 
   void _syncTitle() {
+    if (_tab.url.startsWith('http')) widget.w.reopen = 'browser|${_tab.url}';
     final t = _tab.title;
     context.read<WindowManager>().setTitle(widget.w.id, t.isEmpty || t == 'New Tab' ? 'Internet' : '$t - Internet');
   }

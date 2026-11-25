@@ -16,6 +16,7 @@ import 'explorer.dart';
 import 'media_player.dart';
 import 'mini_player.dart';
 import 'notepad.dart';
+import 'session.dart';
 import 'solitaire.dart';
 import 'updater.dart';
 import 'platform.dart';
@@ -80,6 +81,60 @@ class Desk {
   final WindowManager wm;
   final AppState app;
   final AppList apps;
+
+  // ------------------------------------------------------------ restarts
+
+  /// Windows reopen where they were after a restart (see session.dart).
+  late final session = DeskSession(wm, reopen: reopenWindow, reopenOf: _reopenOf);
+
+  static const _simpleReopen = {
+    kMediaPlayerId: 'player',
+    kMiniPlayerId: 'mini',
+    'solitaire': 'solitaire',
+    kClaudeId: 'claude',
+    kNetworkId: 'network',
+    kBluetoothId: 'bluetooth',
+    'display': 'display',
+    'downloads': 'downloads',
+  };
+
+  String? _reopenOf(DeskWindow w) => w.reopen ?? _simpleReopen[w.id];
+
+  /// Opens a window from a reopen string saved before a restart.
+  DeskWindow? reopenWindow(String spec) {
+    final bar = spec.indexOf('|');
+    final kind = bar < 0 ? spec : spec.substring(0, bar);
+    final arg = bar < 0 ? '' : spec.substring(bar + 1);
+    bool exists(String p) => FileSystemEntity.typeSync(p) != FileSystemEntityType.notFound;
+    switch (kind) {
+      case 'explorer':
+        final special = arg.startsWith('::');
+        return wm.open(explorerWindow(path: arg.isEmpty || (!special && !exists(arg)) ? null : arg));
+      case 'browser':
+        return wm.open(browserWindow(url: arg.isEmpty ? null : arg));
+      case 'notepad':
+        return arg.isNotEmpty && exists(arg) ? wm.open(notepadFileWindow(arg)) : null;
+      case 'picture':
+        return arg.isNotEmpty && exists(arg) ? wm.open(pictureWindow(arg)) : null;
+      case 'player':
+        return wm.open(mediaPlayerWindow());
+      case 'mini':
+        return wm.open(miniPlayerWindow());
+      case 'solitaire':
+        return wm.open(solitaireWindow());
+      case 'claude':
+        return wm.open(claudeWindow());
+      case 'network':
+        return wm.open(networkWindow());
+      case 'bluetooth':
+        return wm.open(bluetoothWindow());
+      case 'display':
+        return wm.open(displayPropertiesWindow());
+      case 'downloads':
+        return wm.open(downloadsWindow());
+    }
+    return null;
+  }
 
   // ------------------------------------------------------------ openers
 

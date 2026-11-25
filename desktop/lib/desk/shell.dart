@@ -36,6 +36,9 @@ class _DesktopShellState extends State<DesktopShell> {
     _keys = DeskKeys(context.read<Desk>());
     HardwareKeyboard.instance.addHandler(_keys.handle);
     DeskPlatform.listenForShortcuts(_keys.external);
+    // Once the desktop has its size: reopen last time's windows.
+    final desk = context.read<Desk>();
+    WidgetsBinding.instance.addPostFrameCallback((_) => unawaited(desk.session.restore()));
   }
 
   @override

@@ -18,6 +18,7 @@ DeskWindow notepadWindow({String? path, String? name, String? content}) {
     icon: Icons.description,
     size: const Size(560, 420),
     minSize: const Size(240, 160),
+    reopen: path == null ? null : 'notepad|$path',
     content: (c, w) => _Notepad(w: w, path: path, name: name, initial: content),
   );
 }
@@ -95,6 +96,7 @@ class _NotepadState extends State<_Notepad> {
   void _setName(String name, String? path) {
     _name = name;
     _path = path;
+    widget.w.reopen = path == null ? null : 'notepad|$path';
     _wm.setTitle(widget.w.id, '$name - Notepad');
   }
 
