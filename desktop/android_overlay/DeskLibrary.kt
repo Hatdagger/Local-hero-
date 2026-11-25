@@ -22,6 +22,14 @@ object DeskLibrary {
     private val worker = Executors.newSingleThreadExecutor()
     private val artWorker = Executors.newFixedThreadPool(2)
 
+    /** One song at a time, at low priority, for Auto Mixes. */
+    private val soundWorker = Executors.newSingleThreadExecutor { r ->
+        Thread({
+            android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND)
+            r.run()
+        }, "desk-sound")
+    }
+
     fun register(activity: Activity, engine: FlutterEngine) {
         val ch = MethodChannel(engine.dartExecutor.binaryMessenger, "desk/library")
         ch.setMethodCallHandler { call, result ->
@@ -48,6 +56,14 @@ object DeskLibrary {
                     artWorker.execute {
                         val bytes = try { art(activity, Uri.parse(uri), size) } catch (e: Throwable) { null }
                         activity.runOnUiThread { result.success(bytes) }
+                    }
+                }
+                "analyze" -> {
+                    val uri = call.argument<String>("uri") ?: ""
+                    val duration = (call.argument<Number>("duration") ?: 0).toLong()
+                    soundWorker.execute {
+                        val f = try { DeskSound.analyze(activity, Uri.parse(uri), duration) } catch (e: Throwable) { null }
+                        activity.runOnUiThread { result.success(f) }
                     }
                 }
                 else -> result.notImplemented()

@@ -14,6 +14,7 @@ import 'package:video_player/video_player.dart';
 import 'desk.dart';
 import 'explorer.dart' show confirmBox, promptBox;
 import 'media_library.dart';
+import 'mixes.dart';
 import 'playlists.dart';
 import 'window_manager.dart';
 import 'xp_theme.dart';
@@ -80,6 +81,26 @@ class DeskPlayer extends ChangeNotifier {
 
   int playsOf(MediaItem m) => plays[m.key] ?? 0;
 
+  // Listening history for Auto Mixes: one entry per song started.
+  MediaItem? _ev;
+  int _evStart = 0;
+  int _evMaxMs = 0;
+
+  void _startEvent(MediaItem m) {
+    _ev = m.video ? null : m;
+    _evStart = DateTime.now().millisecondsSinceEpoch;
+    _evMaxMs = 0;
+  }
+
+  void _endEvent({bool completed = false}) {
+    final m = _ev;
+    _ev = null;
+    if (m == null) return;
+    final dur = duration.inMilliseconds > 0 ? duration.inMilliseconds : m.durationMs;
+    final done = completed || (dur > 0 && _evMaxMs >= dur * 0.9);
+    AutoMixes.instance.record(PlayEvent(m.key, _evStart, done ? math.max(_evMaxMs, dur) : _evMaxMs, dur, done));
+  }
+
   /// Plays [list] from [start].
   Future<void> play(List<MediaItem> list, int start, {bool? shuffled}) async {
     if (list.isEmpty) return;
@@ -105,6 +126,7 @@ class DeskPlayer extends ChangeNotifier {
 
   Future<void> _load({required bool autoplay}) async {
     final serial = ++_loadSerial;
+    _endEvent();
     final old = controller;
     controller = null;
     old?.removeListener(_onTick);
@@ -144,6 +166,7 @@ class DeskPlayer extends ChangeNotifier {
     await c.setVolume(muted ? 0 : volume);
     c.addListener(_onTick);
     if (autoplay) await c.play();
+    _startEvent(m);
     plays[m.key] = (plays[m.key] ?? 0) + 1;
     unawaited(_savePrefs());
     notifyListeners();
@@ -153,6 +176,7 @@ class DeskPlayer extends ChangeNotifier {
     final c = controller;
     if (c == null) return;
     final v = c.value;
+    if (_ev != null && v.position.inMilliseconds > _evMaxMs) _evMaxMs = v.position.inMilliseconds;
     if (v.hasError && error == null) {
       error = v.errorDescription ?? "Can't play this file.";
     }
@@ -165,7 +189,10 @@ class DeskPlayer extends ChangeNotifier {
   }
 
   Future<void> _finished() async {
+    final m = current;
+    _endEvent(completed: true);
     if (repeat == Repeat.one) {
+      if (m != null) _startEvent(m);
       await seek(Duration.zero);
       await controller?.play();
       _ending = false;
@@ -191,7 +218,10 @@ class DeskPlayer extends ChangeNotifier {
     if (c.value.isPlaying) {
       await c.pause();
     } else {
-      if (c.value.position >= c.value.duration && c.value.duration > Duration.zero) await c.seekTo(Duration.zero);
+      if (c.value.position >= c.value.duration && c.value.duration > Duration.zero) {
+        await c.seekTo(Duration.zero);
+        if (current != null) _startEvent(current!);
+      }
       _ending = false;
       await c.play();
     }
@@ -479,7 +509,7 @@ class _PlayerWindow extends StatefulWidget {
   State<_PlayerWindow> createState() => _PlayerWindowState();
 }
 
-enum _Tab { nowPlaying, library, videos, playlist }
+enum _Tab { nowPlaying, library, videos, mixes, playlist }
 
 /// Songs dragged from the library (with the mouse) onto a playlist.
 class _SongDrag {
@@ -491,9 +521,12 @@ class _PlayerWindowState extends State<_PlayerWindow> {
   final lib = MediaLibrary.instance;
   final player = DeskPlayer.instance;
   final lists = Playlists.instance;
+  final auto = AutoMixes.instance;
   Playlist? _list;
+  Mix? _mix;
+  bool _analyseStarted = false;
   bool _mouse = false;
-  late _Tab _tab = _Tab.values[widget.startTab.clamp(0, 2)];
+  late _Tab _tab = _Tab.values[widget.startTab.clamp(0, 3)];
   GroupBy _group = GroupBy.songs;
   Bucket? _bucket;
   SortBy _sort = SortBy.artist;
@@ -523,8 +556,12 @@ class _PlayerWindowState extends State<_PlayerWindow> {
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
-      listenable: Listenable.merge([lib, player, lists]),
+      listenable: Listenable.merge([lib, player, lists, auto]),
       builder: (c, _) {
+        if (!_analyseStarted && lib.scanned && lib.songs.isNotEmpty) {
+          _analyseStarted = true;
+          scheduleMicrotask(() => auto.analyse(lib.songs));
+        }
         if (_tab == _Tab.playlist && !lists.lists.contains(_list)) {
           _tab = _Tab.library;
           _list = null;
@@ -555,6 +592,7 @@ class _PlayerWindowState extends State<_PlayerWindow> {
                       _Tab.nowPlaying => _nowPlaying(),
                       _Tab.library => _library(),
                       _Tab.videos => _videos(),
+                      _Tab.mixes => _mix == null ? _mixesView() : _mixView(_mix!),
                       _Tab.playlist => _playlistView(_list!),
                     },
                   ),
@@ -578,6 +616,7 @@ class _PlayerWindowState extends State<_PlayerWindow> {
         onTap: () => setState(() {
           _tab = t;
           _list = null;
+          _mix = null;
         }),
         child: Container(
           margin: const EdgeInsets.fromLTRB(6, 6, 6, 0),
@@ -605,6 +644,7 @@ class _PlayerWindowState extends State<_PlayerWindow> {
         item(_Tab.nowPlaying, Icons.graphic_eq, 'Now Playing'),
         item(_Tab.library, Icons.library_music, 'Music Library'),
         item(_Tab.videos, Icons.video_library, 'Videos'),
+        item(_Tab.mixes, Icons.auto_awesome, 'Auto Mixes'),
         Padding(
           padding: const EdgeInsets.fromLTRB(10, 14, 6, 2),
           child: Row(children: [
@@ -1286,6 +1326,7 @@ class _PlayerWindowState extends State<_PlayerWindow> {
         const PopupMenuItem(value: 'play', child: Text('Play', style: Xp.textBold)),
         const PopupMenuItem(value: 'next', child: Text('Play Next', style: Xp.text)),
         const PopupMenuItem(value: 'queue', child: Text('Add to Now Playing', style: Xp.text)),
+        const PopupMenuItem(value: 'like', child: Text('Songs Like This', style: Xp.text)),
         ..._addMenuItems(),
       ],
     );
@@ -1297,6 +1338,282 @@ class _PlayerWindowState extends State<_PlayerWindow> {
         player.playNext(m);
       case 'queue':
         player.addToQueue(m);
+      case 'like':
+        _songsLike(m);
+    }
+  }
+
+  // ------------------------------------------------------------ Auto Mixes
+
+  void _songsLike(MediaItem m) => setState(() {
+        _tab = _Tab.mixes;
+        _mix = auto.soundsLike(lib.songs, m);
+        _selected = null;
+      });
+
+  void _playMix(Mix m, {required bool shuffled, int start = 0}) {
+    if (m.items.isEmpty) return;
+    unawaited(player.play(m.items, start, shuffled: shuffled));
+  }
+
+  Widget _analysisBar() {
+    final n = auto.features.length;
+    final String text;
+    if (auto.analysing) {
+      text = 'Listening to your songs to work out their mood: ${auto.analysisDone} of ${auto.analysisTotal}. '
+          'Mood mixes get better as this goes.';
+    } else if (auto.paused) {
+      text = 'Listening paused. Mood mixes use the $n songs heard so far.';
+    } else {
+      text = n == 0 ? 'Mood mixes appear once your songs have been listened to.' : 'Moods worked out for $n songs.';
+    }
+    return Container(
+      padding: const EdgeInsets.fromLTRB(10, 6, 8, 6),
+      color: const Color(0xFFF4F6FB),
+      child: Row(children: [
+        Icon(auto.analysing ? Icons.hearing : Icons.auto_awesome, size: 28, color: const Color(0xFF2B55B8)),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text('Auto Mixes', style: Xp.textBold.copyWith(fontSize: 14)),
+            Text(text, style: Xp.textGrey.copyWith(fontSize: 11), maxLines: 2, overflow: TextOverflow.ellipsis),
+            if (auto.analysing && auto.analysisTotal > 0)
+              Padding(
+                padding: const EdgeInsets.only(top: 3, right: 8),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(2),
+                  child: LinearProgressIndicator(
+                    value: auto.analysisDone / auto.analysisTotal,
+                    minHeight: 6,
+                    backgroundColor: const Color(0xFFDDE3F0),
+                    color: const Color(0xFF3FA83F),
+                  ),
+                ),
+              ),
+          ]),
+        ),
+        if (auto.analysing)
+          XpButton(label: 'Pause', onPressed: auto.pause)
+        else if (auto.paused)
+          XpButton(label: 'Resume', onPressed: () => unawaited(auto.analyse(lib.songs))),
+        const SizedBox(width: 4),
+        XpButton(label: 'New Mixes', onPressed: auto.refresh),
+      ]),
+    );
+  }
+
+  Widget _mixesView() {
+    if (lib.scanned && !lib.permission) return _permissionNote();
+    final mixes = lib.songs.isEmpty ? const <Mix>[] : auto.mixes(lib.songs);
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      _analysisBar(),
+      Expanded(
+        child: mixes.isEmpty
+            ? Center(
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Text(
+                      lib.scanning || !lib.scanned
+                          ? 'Reading library...'
+                          : 'No mixes yet. Play some music and they will start to appear.',
+                      textAlign: TextAlign.center,
+                      style: Xp.textGrey),
+                ),
+              )
+            : LayoutBuilder(builder: (c, box) {
+                final cols = math.max(1, (box.maxWidth / 230).floor());
+                return GridView.builder(
+                  padding: const EdgeInsets.all(8),
+                  gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: cols, mainAxisExtent: 92),
+                  itemCount: mixes.length,
+                  itemBuilder: (c, i) => _mixCard(mixes[i]),
+                );
+              }),
+      ),
+    ]);
+  }
+
+  Widget _mixCard(Mix m) {
+    Future<void> menu(Offset at) async {
+      final v = await showMenu<String>(
+        context: context,
+        position: RelativeRect.fromLTRB(at.dx, at.dy, at.dx + 1, at.dy + 1),
+        items: [
+          const PopupMenuItem(value: 'open', child: Text('Open', style: Xp.textBold)),
+          const PopupMenuItem(value: 'play', child: Text('Play', style: Xp.text)),
+          const PopupMenuItem(value: 'shuffle', child: Text('Shuffle', style: Xp.text)),
+          const PopupMenuItem(value: 'save', child: Text('Save as Playlist...', style: Xp.text)),
+        ],
+      );
+      switch (v) {
+        case 'open':
+          setState(() => _mix = m);
+        case 'play':
+          _playMix(m, shuffled: false);
+        case 'shuffle':
+          _playMix(m, shuffled: true);
+        case 'save':
+          _newPlaylist(m.items, name: lists.freeName(m.title));
+      }
+    }
+
+    return GestureDetector(
+      onTap: () => setState(() {
+        _mix = m;
+        _selected = null;
+      }),
+      onDoubleTap: () => _playMix(m, shuffled: false),
+      onSecondaryTapUp: (d) => menu(d.globalPosition),
+      onLongPressStart: (d) => menu(d.globalPosition),
+      child: Container(
+        margin: const EdgeInsets.all(5),
+        padding: const EdgeInsets.all(8),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(color: const Color(0xFF9DB3E6)),
+          gradient: const LinearGradient(
+              begin: Alignment.topLeft, end: Alignment.bottomRight, colors: [Color(0xFFFFFFFF), Color(0xFFE3EAF8)]),
+        ),
+        child: Row(children: [
+          Container(
+            width: 52,
+            height: 52,
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(6),
+              gradient: const LinearGradient(colors: [Color(0xFF4F7BE0), Color(0xFF2B55B8)]),
+            ),
+            child: Icon(m.icon, color: Colors.white, size: 30),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+              Text(m.title, style: Xp.textBold.copyWith(fontSize: 13), maxLines: 1, overflow: TextOverflow.ellipsis),
+              Text(m.subtitle, style: Xp.textGrey.copyWith(fontSize: 11), maxLines: 2, overflow: TextOverflow.ellipsis),
+              Text(_songs(m.items.length), style: Xp.textGrey.copyWith(fontSize: 11)),
+            ]),
+          ),
+          Tooltip(
+            message: 'Play',
+            child: GestureDetector(
+              onTap: () => _playMix(m, shuffled: false),
+              child: const Icon(Icons.play_circle_fill, size: 30, color: Color(0xFF3FA83F)),
+            ),
+          ),
+        ]),
+      ),
+    );
+  }
+
+  Widget _mixView(Mix m) {
+    final cur = player.current?.key;
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      Container(
+        padding: const EdgeInsets.fromLTRB(6, 8, 8, 8),
+        color: const Color(0xFFF4F6FB),
+        child: Row(children: [
+          Tooltip(
+            message: 'Back to Auto Mixes',
+            child: GestureDetector(
+              onTap: () => setState(() => _mix = null),
+              child: const Padding(
+                padding: EdgeInsets.all(4),
+                child: Icon(Icons.arrow_back, size: 20, color: Color(0xFF2B55B8)),
+              ),
+            ),
+          ),
+          Icon(m.icon, size: 36, color: const Color(0xFF2B55B8)),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(m.title, style: Xp.textBold.copyWith(fontSize: 14), overflow: TextOverflow.ellipsis),
+              Text(
+                  '${m.subtitle} - ${_songs(m.items.length)}, '
+                  '${LibraryOps.formatTime(m.items.fold(0, (t, x) => t + x.durationMs))}',
+                  style: Xp.textGrey.copyWith(fontSize: 11),
+                  overflow: TextOverflow.ellipsis),
+            ]),
+          ),
+          XpButton(label: 'Play All', onPressed: m.items.isEmpty ? null : () => _playMix(m, shuffled: false)),
+          const SizedBox(width: 4),
+          XpButton(label: 'Shuffle', onPressed: m.items.isEmpty ? null : () => _playMix(m, shuffled: true)),
+          const SizedBox(width: 4),
+          XpButton(
+              label: 'Save as Playlist',
+              onPressed: m.items.isEmpty ? null : () => _newPlaylist(m.items, name: lists.freeName(m.title))),
+        ]),
+      ),
+      Expanded(
+        child: ListView.builder(
+          itemCount: m.items.length,
+          itemBuilder: (c, i) {
+            final t = m.items[i];
+            final sel = _selected == 'mix:$i';
+            final playing = cur == t.key;
+            final style = Xp.text.copyWith(
+                fontSize: 12,
+                color: sel ? Colors.white : (playing ? const Color(0xFF0C32A4) : null),
+                fontWeight: playing ? FontWeight.bold : null);
+            final mood = auto.moodOf(t);
+            return GestureDetector(
+              onTap: () => setState(() => _selected = 'mix:$i'),
+              onDoubleTap: () => _playMix(m, shuffled: false, start: i),
+              onSecondaryTapUp: (d) => _mixSongMenu(m, i, d.globalPosition),
+              onLongPressStart: (d) => _mixSongMenu(m, i, d.globalPosition),
+              child: Container(
+                height: 26,
+                padding: const EdgeInsets.only(left: 8),
+                color: sel ? Xp.selection : (i.isOdd ? const Color(0xFFF7F7F7) : Colors.white),
+                child: Row(children: [
+                  SizedBox(width: 28, child: Text('${i + 1}', style: style)),
+                  Expanded(flex: 4, child: Text(t.title, style: style, maxLines: 1, overflow: TextOverflow.ellipsis)),
+                  Expanded(flex: 3, child: Text(t.artist, style: style, maxLines: 1, overflow: TextOverflow.ellipsis)),
+                  SizedBox(
+                    width: 100,
+                    child: mood == null
+                        ? const SizedBox()
+                        : Row(children: [
+                            Icon(mood.icon, size: 13, color: sel ? Colors.white : const Color(0xFF2B55B8)),
+                            const SizedBox(width: 3),
+                            Flexible(child: Text(mood.label, style: style, overflow: TextOverflow.ellipsis)),
+                          ]),
+                  ),
+                  SizedBox(
+                    width: 50,
+                    child: Text(t.durationMs > 0 ? LibraryOps.formatTime(t.durationMs) : '', style: style),
+                  ),
+                ]),
+              ),
+            );
+          },
+        ),
+      ),
+    ]);
+  }
+
+  Future<void> _mixSongMenu(Mix m, int i, Offset at) async {
+    setState(() => _selected = 'mix:$i');
+    final t = m.items[i];
+    final v = await showMenu<String>(
+      context: context,
+      position: RelativeRect.fromLTRB(at.dx, at.dy, at.dx + 1, at.dy + 1),
+      items: [
+        const PopupMenuItem(value: 'play', child: Text('Play', style: Xp.textBold)),
+        const PopupMenuItem(value: 'next', child: Text('Play Next', style: Xp.text)),
+        const PopupMenuItem(value: 'queue', child: Text('Add to Now Playing', style: Xp.text)),
+        const PopupMenuItem(value: 'like', child: Text('Songs Like This', style: Xp.text)),
+        ..._addMenuItems(),
+      ],
+    );
+    if (_handleAdd(v, [t])) return;
+    switch (v) {
+      case 'play':
+        _playMix(m, shuffled: false, start: i);
+      case 'next':
+        player.playNext(t);
+      case 'queue':
+        player.addToQueue(t);
+      case 'like':
+        _songsLike(t);
     }
   }
 

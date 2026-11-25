@@ -340,8 +340,8 @@ class Desk {
       await openBrave();
     } else if (const {'downloads', 'my downloads'}.contains(lower)) {
       openDownloads();
-    } else if (const {'wmplayer', 'wmplayer.exe', 'player', 'media player', 'music', 'videos', 'video'}.contains(lower)) {
-      openMediaPlayer(tab: lower == 'videos' || lower == 'video' ? 2 : 1);
+    } else if (const {'wmplayer', 'wmplayer.exe', 'player', 'media player', 'music', 'videos', 'video', 'mixes', 'auto mixes'}.contains(lower)) {
+      openMediaPlayer(tab: lower == 'videos' || lower == 'video' ? 2 : (lower.contains('mixes') ? 3 : 1));
     } else if (const {'mini player', 'miniplayer', 'localhero', 'local hero'}.contains(lower)) {
       openMiniPlayer();
     } else if (cmd.startsWith('/')) {
