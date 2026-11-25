@@ -77,6 +77,7 @@ String typeLabel(String name, {bool folder = false}) {
     case FileKind.folder:
       return 'File Folder';
     case FileKind.other:
+      if (e == 'lnk') return 'Shortcut';
       return e.isEmpty ? 'File' : '${e.toUpperCase()} File';
   }
 }

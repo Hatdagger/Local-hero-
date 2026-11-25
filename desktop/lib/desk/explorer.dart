@@ -10,8 +10,10 @@ import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'desk.dart';
+import 'desktop_icons.dart';
 import 'file_dialog.dart';
 import 'files.dart';
+import 'media_player.dart';
 import 'notepad.dart';
 import 'platform.dart';
 import 'wallpaper.dart';
@@ -50,6 +52,9 @@ class FileDrag {
 class Places {
   static String root = '/storage/emulated/0';
   static String documents = '';
+
+  /// The Desktop folder (set once the desktop has loaded).
+  static String desktop = '';
   static List<StorageVolume> volumes = const [];
   static bool hasAccess = false;
   static bool _ready = false;
@@ -77,6 +82,7 @@ class Places {
     if (path == kComputerPath) return 'My Computer';
     if (path == kRecyclePath) return 'Recycle Bin';
     if (path == documents && documents.isNotEmpty) return 'My Documents';
+    if (path == desktop && desktop.isNotEmpty) return 'Desktop';
     for (final v in volumes) {
       if (v.path == path) return v.name;
     }
@@ -89,6 +95,7 @@ class Places {
     if (path == kComputerPath) return 'My Computer';
     if (path == kRecyclePath) return 'Recycle Bin';
     if (path == documents) return 'My Documents';
+    if (path == desktop && desktop.isNotEmpty) return 'Desktop';
     return path;
   }
 
@@ -100,6 +107,7 @@ class Places {
     if (l == 'my computer' || l == 'computer') return kComputerPath;
     if (l == 'recycle bin' || l == 'recycle') return kRecyclePath;
     if (l == 'my documents' || l == 'documents') return documents;
+    if (l == 'desktop' && desktop.isNotEmpty) return desktop;
     if (l == 'downloads' || l == 'my downloads') return downloads;
     if (l == 'pictures' || l == 'my pictures') return pictures;
     if (l == 'music' || l == 'my music') return music;
@@ -1010,11 +1018,17 @@ class _ExplorerState extends State<_Explorer> {
       _M('Open', () => _openSelected(), bold: true),
       if (one != null && one.folder) _M('Open in New Window', () => _desk.openExplorer(one.path)),
       if (kind == FileKind.text) _M('Edit in Notepad', () => openInNotepad(_desk, one!.path)),
-      if (kind == FileKind.audio) _M('Play in Local Hero', () => playInLocalHero(_desk, one!.path)),
+      if (kind == FileKind.audio || kind == FileKind.video)
+        _M('Play in Media Player', () => _desk.playFile(one!.path, video: kind == FileKind.video)),
+      if (kind == FileKind.audio || kind == FileKind.video)
+        _M('Add to Now Playing', () => DeskPlayer.instance.addToQueue(MediaItem.fromPath(one!.path, video: kind == FileKind.video))),
+      if (kind == FileKind.audio) _M('Open in Local Hero', () => playInLocalHero(_desk, one!.path)),
       if (kind == FileKind.web || kind == FileKind.text) _M('Open in Browser', () => openInBrowser(_desk, one!.path)),
       if (one != null && !one.folder) _M('Open With...', () => openWithChooser(_desk, one.path)),
       if (kind == FileKind.image && kViewableImages.contains(extOf(one!.name)))
         _M('Set as Desktop Background', () => _setWallpaper(one)),
+      const _M.sep(),
+      _M('Send To  ▸  Desktop (create shortcut)', () => sendToDesktop(_desk, _selected.map((x) => x.path).toList())),
       const _M.sep(),
       _M('Cut', () => _copy(cut: true), shortcut: 'Ctrl+X'),
       _M('Copy', () => _copy(cut: false), shortcut: 'Ctrl+C'),
@@ -1300,6 +1314,7 @@ class _ExplorerState extends State<_Explorer> {
   }
 
   List<(String, String)> _placeList() => [
+        if (Places.desktop.isNotEmpty) ('Desktop', Places.desktop),
         ('My Computer', kComputerPath),
         ('My Documents', Places.documents),
         for (final v in Places.volumes) (v.name, v.path),
@@ -1819,6 +1834,10 @@ Future<void> playInLocalHero(Desk desk, String path) async {
 Future<void> openFileOnDesk(Desk desk, String path) async {
   final name = baseName(path);
   final ext = extOf(name);
+  if (ShortcutFile.isShortcut(name)) {
+    if (!await openShortcutFile(desk, path)) desk.message('Shortcut', "'$name' doesn't point anywhere.");
+    return;
+  }
   switch (kindOf(name)) {
     case FileKind.folder:
       desk.openExplorer(path);
@@ -1831,7 +1850,9 @@ Future<void> openFileOnDesk(Desk desk, String path) async {
         await openWithChooser(desk, path);
       }
     case FileKind.audio:
-      await playInLocalHero(desk, path);
+      await desk.playFile(path, video: false);
+    case FileKind.video:
+      await desk.playFile(path, video: true);
     case FileKind.web:
       if (ext == 'url' || ext == 'webloc') {
         final url = _shortcutTarget(path);

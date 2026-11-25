@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -8,9 +7,9 @@ import 'package:provider/provider.dart';
 import '../app/app_state.dart';
 import '../oscar/client.dart';
 import 'desk.dart';
-import 'explorer.dart';
-import 'files.dart';
+import 'desktop_icons.dart';
 import 'keys.dart';
+import 'network.dart';
 import 'platform.dart';
 import 'updater.dart';
 import 'wallpaper.dart';
@@ -30,8 +29,6 @@ class DesktopShell extends StatefulWidget {
 
 class _DesktopShellState extends State<DesktopShell> {
   late final DeskKeys _keys;
-  String? _selectedIcon;
-  Offset? _contextAt;
 
   @override
   void initState() {
@@ -57,51 +54,16 @@ class _DesktopShellState extends State<DesktopShell> {
       type: MaterialType.transparency,
       child: LayoutBuilder(builder: (context, box) {
         wm.desk = Size(box.maxWidth, box.maxHeight - kTaskbarHeight);
-        final icons = <_IconSpec>[
-          _IconSpec('computer', 'My Computer', Icons.computer, const Color(0xFFDDE8FF), desk.openExplorer),
-          _IconSpec('docs', 'My Documents', Icons.folder_special, const Color(0xFFF2C75C), desk.openMyDocuments),
-          _IconSpec('recycle', 'Recycle Bin', Icons.delete_outline, const Color(0xFFDDE8FF), desk.openRecycleBin),
-          _IconSpec('internet', 'Internet', Icons.public, const Color(0xFF6FB8FF), () => desk.openBrowser()),
-          _IconSpec('aim', 'Instant Messenger', Icons.chat_bubble, const Color(0xFFF5C400), desk.openAim),
-          _IconSpec('claude', 'Claude', Icons.auto_awesome, const Color(0xFFE8875B), desk.openClaude),
-          _IconSpec('player', 'Local Hero', Icons.music_note, const Color(0xFFFFB04A), desk.openMiniPlayer),
-          _IconSpec('notepad', 'Notepad', Icons.description, const Color(0xFFE6F0FF), desk.openNotepad),
-          _IconSpec('solitaire', 'Solitaire', Icons.style, const Color(0xFFFFFFFF), desk.openSolitaire),
-          _IconSpec('run', 'Run...', Icons.play_circle_fill, const Color(0xFFDDE8FF), desk.openRun),
-          _IconSpec('display', 'Display Properties', Icons.desktop_windows, const Color(0xFFDDE8FF), desk.openDisplay),
-        ];
-        final perColumn = ((wm.desk.height - 10) / 86).floor().clamp(1, 50);
+        final area = wm.workArea;
         return Stack(children: [
-          // Background (tap clears selection, right-click/long-press = menu)
+          // Background + icons (tap clears, right-click/long-press = menu)
           Positioned.fill(
-            child: GestureDetector(
-              onTap: () => setState(() {
-                _selectedIcon = null;
-                _contextAt = null;
-                wm.closeStart();
-              }),
-              onSecondaryTapUp: (d) => setState(() => _contextAt = d.localPosition),
-              onLongPressStart: (d) => setState(() => _contextAt = d.localPosition),
-              child: WallpaperView(kind: wp.kind, imagePath: wp.imagePath, position: wp.position, color: wp.color),
+            child: DesktopIcons(
+              area: area,
+              onBackgroundTap: wm.closeStart,
+              background: WallpaperView(kind: wp.kind, imagePath: wp.imagePath, position: wp.position, color: wp.color),
             ),
           ),
-          // Desktop icons
-          for (var i = 0; i < icons.length; i++)
-            Positioned(
-              left: 8 + (i ~/ perColumn) * 86.0,
-              top: 10 + (i % perColumn) * 86.0,
-              child: icons[i].id == 'recycle'
-                  ? _RecycleIcon(
-                      spec: icons[i],
-                      selected: _selectedIcon == icons[i].id,
-                      onSelect: () => setState(() => _selectedIcon = icons[i].id),
-                    )
-                  : _DesktopIcon(
-                      spec: icons[i],
-                      selected: _selectedIcon == icons[i].id,
-                      onSelect: () => setState(() => _selectedIcon = icons[i].id),
-                    ),
-            ),
           // Windows, bottom to top
           Positioned(
             left: 0,
@@ -113,31 +75,6 @@ class _DesktopShellState extends State<DesktopShell> {
                 if (!w.minimized) XpWindowFrame(key: ValueKey(w.id), w: w, wm: wm),
             ]),
           ),
-          // Desktop right-click menu
-          if (_contextAt != null) ...[
-            Positioned.fill(child: GestureDetector(onTap: () => setState(() => _contextAt = null))),
-            Positioned(
-              left: _contextAt!.dx,
-              top: _contextAt!.dy,
-              child: XpMenuPanel(width: 170, children: [
-                XpMenuItem(
-                    label: 'Refresh',
-                    mnemonic: 2,
-                    onTap: () {
-                      setState(() => _contextAt = null);
-                      context.read<AppList>().load(force: true);
-                    }),
-                const XpMenuSeparator(),
-                XpMenuItem(
-                    label: 'Properties',
-                    mnemonic: 1,
-                    onTap: () {
-                      setState(() => _contextAt = null);
-                      desk.openDisplay();
-                    }),
-              ]),
-            ),
-          ],
           // Alt+Space window menu
           if (wm.menuFor != null && wm.byId(wm.menuFor!) != null) ..._windowMenu(wm),
           // Start menu
@@ -166,6 +103,8 @@ class _DesktopShellState extends State<DesktopShell> {
                 ),
               ),
             ),
+          // Pop-ups above the clock ("Bob has signed on.")
+          Positioned(right: 8, bottom: kTaskbarHeight + 8, child: ToastStack(toasts: desk.toasts)),
           // Taskbar
           const Positioned(left: 0, right: 0, bottom: 0, height: kTaskbarHeight, child: Taskbar()),
         ]);
@@ -204,96 +143,6 @@ class _DesktopShellState extends State<DesktopShell> {
         ]),
       ),
     ];
-  }
-}
-
-class _IconSpec {
-  final String id;
-  final String label;
-  final IconData icon;
-  final Color color;
-  final VoidCallback open;
-  _IconSpec(this.id, this.label, this.icon, this.color, this.open);
-}
-
-/// The Recycle Bin icon: shows when it has something in it, and takes files
-/// dragged out of an Explorer window.
-class _RecycleIcon extends StatelessWidget {
-  const _RecycleIcon({required this.spec, required this.selected, required this.onSelect});
-  final _IconSpec spec;
-  final bool selected;
-  final VoidCallback onSelect;
-
-  @override
-  Widget build(BuildContext context) {
-    final desk = context.read<Desk>();
-    return ListenableBuilder(
-      listenable: RecycleBin.instance,
-      builder: (c, _) {
-        final full = !RecycleBin.instance.isEmpty;
-        final s = _IconSpec(spec.id, spec.label, full ? Icons.delete : Icons.delete_outline, spec.color, spec.open);
-        return DragTarget<FileDrag>(
-          onWillAcceptWithDetails: (d) => d.data.from != kRecyclePath && d.data.from != kComputerPath,
-          onAcceptWithDetails: (d) async {
-            try {
-              await Places.init();
-              await RecycleBin.instance.recycle(d.data.paths);
-            } catch (e) {
-              desk.message('Recycle Bin', "Couldn't delete: ${e is FileSystemException ? e.message : e}");
-            }
-          },
-          builder: (c, cand, rej) => Container(
-            decoration: cand.isNotEmpty ? BoxDecoration(color: const Color(0x55316AC5), borderRadius: BorderRadius.circular(4)) : null,
-            child: _DesktopIcon(spec: s, selected: selected || cand.isNotEmpty, onSelect: onSelect),
-          ),
-        );
-      },
-    );
-  }
-}
-
-class _DesktopIcon extends StatelessWidget {
-  const _DesktopIcon({required this.spec, required this.selected, required this.onSelect});
-  final _IconSpec spec;
-  final bool selected;
-  final VoidCallback onSelect;
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onSelect,
-      onDoubleTap: () {
-        onSelect();
-        spec.open();
-      },
-      child: SizedBox(
-        width: 78,
-        child: Column(children: [
-          Container(
-            padding: const EdgeInsets.all(2),
-            color: selected ? const Color(0x66316AC5) : null,
-            child: Icon(spec.icon, size: 40, color: spec.color, shadows: const [
-              Shadow(color: Color(0x88000000), offset: Offset(1, 2), blurRadius: 2),
-            ]),
-          ),
-          const SizedBox(height: 3),
-          Container(
-            color: selected ? Xp.selection : null,
-            padding: const EdgeInsets.symmetric(horizontal: 2),
-            child: Text(
-              spec.label,
-              textAlign: TextAlign.center,
-              maxLines: 2,
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 12,
-                shadows: [Shadow(color: Colors.black, offset: Offset(1, 1), blurRadius: 1)],
-              ),
-            ),
-          ),
-        ]),
-      ),
-    );
   }
 }
 
@@ -561,6 +410,39 @@ class _TrayState extends State<_Tray> {
           ),
           const SizedBox(width: 10),
         ],
+        ListenableBuilder(
+          listenable: NetState.instance,
+          builder: (c, _) {
+            final net = NetState.instance;
+            return Row(children: [
+              if (net.btAvailable && net.btOn) ...[
+                Tooltip(
+                  message: 'Bluetooth',
+                  child: GestureDetector(
+                    onTap: desk.openBluetooth,
+                    child: const Icon(Icons.bluetooth, size: 16, color: Colors.white),
+                  ),
+                ),
+                const SizedBox(width: 8),
+              ],
+              if (net.wifiAvailable) ...[
+                Tooltip(
+                  message: !net.wifiOn
+                      ? 'Wi-Fi is off'
+                      : net.wifiConnected
+                          ? 'Connected${net.ssid.isEmpty ? '' : ' to ${net.ssid}'}'
+                          : 'Not connected',
+                  child: GestureDetector(
+                    onTap: desk.openNetwork,
+                    child: Icon(wifiIcon(net.bars, on: net.wifiOn, connected: net.wifiConnected),
+                        size: 17, color: Colors.white),
+                  ),
+                ),
+                const SizedBox(width: 10),
+              ],
+            ]);
+          },
+        ),
         Tooltip(
           message: app.link == LinkState.online ? 'AIM: ${app.myScreenName}' : 'AIM: signed off',
           child: GestureDetector(
@@ -630,7 +512,7 @@ class _StartMenuState extends State<StartMenu> {
 
     final menu = Container(
       width: 410,
-      height: 530,
+      height: 590,
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: const BorderRadius.vertical(top: Radius.circular(8)),
@@ -677,7 +559,8 @@ class _StartMenuState extends State<StartMenu> {
                   leftItem(Icons.chat_bubble, const Color(0xFFF5B800), 'Instant Messenger', 'AIM', desk.openAim),
                   leftItem(Icons.auto_awesome, const Color(0xFFE8875B), 'Claude', 'claude.ai', desk.openClaude),
                   const XpMenuSeparator(),
-                  leftItem(Icons.music_note, const Color(0xFFE07A1F), 'Local Hero', 'mini player', desk.openMiniPlayer),
+                  leftItem(Icons.play_circle, const Color(0xFF3DAA4E), 'Media Player', 'music and videos', desk.openMediaPlayer),
+                  leftItem(Icons.music_note, const Color(0xFFE07A1F), 'Mini Player', null, desk.openMiniPlayer),
                   leftItem(Icons.description, const Color(0xFF4A6FB5), 'Notepad', null, desk.openNotepad),
                   leftItem(Icons.style, const Color(0xFF2E7D32), 'Solitaire', null, desk.openSolitaire),
                   const XpMenuSeparator(),
@@ -713,6 +596,9 @@ class _StartMenuState extends State<StartMenu> {
                 rightItem(Icons.computer, 'My Computer', () => desk.openExplorer()),
                 rightItem(Icons.download, 'Downloads', desk.openDownloads),
                 rightItem(Icons.delete_outline, 'Recycle Bin', desk.openRecycleBin),
+                const XpMenuSeparator(),
+                rightItem(Icons.wifi, 'Wireless Networks', desk.openNetwork),
+                rightItem(Icons.bluetooth, 'Bluetooth Devices', desk.openBluetooth),
                 const XpMenuSeparator(),
                 rightItem(Icons.shield, 'Brave', () => desk.openBrave()),
                 rightItem(Icons.settings, 'Android Settings', () => DeskPlatform.launch('com.android.settings')),
@@ -758,6 +644,14 @@ class _StartMenuState extends State<StartMenu> {
                   for (final a in apps.apps)
                     _HoverRow(
                       onTap: () => run(() => DeskPlatform.launch(a.package)),
+                      onMenu: (at) => xpPopup(context, at, [
+                        XpPopupItem('Open', () => run(() => DeskPlatform.launch(a.package)), bold: true),
+                        XpPopupItem('Send To Desktop (create shortcut)', () {
+                          final dir = desk.desktop.dir;
+                          if (dir == null) return;
+                          ShortcutFile.create(dir, a.label, app: a.package).then((_) => desk.desktop.refresh());
+                        }),
+                      ]),
                       child: Row(children: [
                         SizedBox(
                           width: 22,
@@ -804,10 +698,11 @@ class _BottomButton extends StatelessWidget {
 }
 
 class _HoverRow extends StatefulWidget {
-  const _HoverRow({required this.child, required this.onTap, this.highlighted = false});
+  const _HoverRow({required this.child, required this.onTap, this.highlighted = false, this.onMenu});
   final Widget child;
   final VoidCallback onTap;
   final bool highlighted;
+  final void Function(Offset global)? onMenu;
 
   @override
   State<_HoverRow> createState() => _HoverRowState();
@@ -824,6 +719,8 @@ class _HoverRowState extends State<_HoverRow> {
       onExit: (_) => setState(() => _hover = false),
       child: GestureDetector(
         onTap: widget.onTap,
+        onSecondaryTapUp: widget.onMenu == null ? null : (d) => widget.onMenu!(d.globalPosition),
+        onLongPressStart: widget.onMenu == null ? null : (d) => widget.onMenu!(d.globalPosition),
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 5),
           color: hi ? const Color(0xFFC1D2EE) : Colors.transparent,

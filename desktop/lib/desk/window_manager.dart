@@ -19,6 +19,7 @@ class DeskWindow {
     this.onClose,
     this.beforeClose,
     this.alwaysOnTop = false,
+    this.dockable = false,
   }) : rect = Offset.zero & size;
 
   final String id;
@@ -40,6 +41,13 @@ class DeskWindow {
   /// Stays above ordinary windows (the mini player).
   final bool alwaysOnTop;
 
+  /// Can be docked to the left or right edge of the screen (the Buddy List).
+  final bool dockable;
+
+  /// Which screen edge the window is docked to, if any. A docked window runs
+  /// the full height of the screen and other windows maximize beside it.
+  DockSide dock = DockSide.none;
+
   /// Runs after the window has closed.
   final VoidCallback? onClose;
 
@@ -52,6 +60,8 @@ class DeskWindow {
 }
 
 enum KbMode { none, move, size }
+
+enum DockSide { none, left, right }
 
 /// Edges for resizing.
 class Edge {
@@ -104,8 +114,84 @@ class WindowManager extends ChangeNotifier {
 
   bool isOpen(String id) => byId(id) != null;
 
+  /// Called whenever a window docks or undocks (to remember the side).
+  void Function(DeskWindow w)? onDockChanged;
+
+  /// The docked window on [side], if one is showing.
+  DeskWindow? dockedOn(DockSide side) {
+    for (final w in _z) {
+      if (w.dock == side && !w.minimized) return w;
+    }
+    return null;
+  }
+
+  /// The part of the desk not taken by docked windows (where maximized
+  /// windows and desktop icons go).
+  Rect get workArea {
+    final l = dockedOn(DockSide.left);
+    final r = dockedOn(DockSide.right);
+    final left = l == null ? 0.0 : math.min(l.rect.width, desk.width / 2);
+    final right = r == null ? desk.width : math.max(desk.width - r.rect.width, desk.width / 2);
+    return Rect.fromLTRB(left, 0, math.max(left + 1, right), desk.height);
+  }
+
   /// Where a window is drawn right now.
-  Rect shownRect(DeskWindow w) => w.maximized ? Offset.zero & desk : w.rect;
+  Rect shownRect(DeskWindow w) {
+    switch (w.dock) {
+      case DockSide.left:
+        return Rect.fromLTWH(0, 0, math.min(w.rect.width, desk.width / 2), desk.height);
+      case DockSide.right:
+        final width = math.min(w.rect.width, desk.width / 2);
+        return Rect.fromLTWH(desk.width - width, 0, width, desk.height);
+      case DockSide.none:
+        return w.maximized ? workArea : w.rect;
+    }
+  }
+
+  /// Docks [id] to [side] (or floats it again with [DockSide.none]).
+  void dockTo(String id, DockSide side) {
+    final w = byId(id);
+    if (w == null || (!w.dockable && side != DockSide.none)) return;
+    if (w.dock == side) return;
+    if (side != DockSide.none) {
+      // Only one window per edge.
+      final other = dockedOn(side);
+      if (other != null && other != w) _undock(other, notify: false);
+      if (w.dock == DockSide.none) w.restoreRect = w.rect;
+      w.maximized = false;
+      w.dock = side;
+    } else {
+      _undock(w, notify: false);
+    }
+    notifyListeners();
+    onDockChanged?.call(w);
+  }
+
+  void _undock(DeskWindow w, {bool notify = true}) {
+    if (w.dock == DockSide.none) return;
+    final shown = shownRect(w);
+    w.dock = DockSide.none;
+    final back = w.restoreRect;
+    final height = back?.height ?? math.min(shown.height, 560.0);
+    w.rect = _fit(Rect.fromLTWH(shown.left, shown.top, shown.width, height));
+    w.restoreRect = null;
+    if (notify) {
+      notifyListeners();
+      onDockChanged?.call(w);
+    }
+  }
+
+  /// End of a title-bar drag: a dockable window let go at the screen's edge
+  /// docks there.
+  void dragEnd(String id, Offset pointer) {
+    final w = byId(id);
+    if (w == null || !w.dockable || w.dock != DockSide.none || w.maximized) return;
+    if (pointer.dx <= 6) {
+      dockTo(id, DockSide.left);
+    } else if (pointer.dx >= desk.width - 6) {
+      dockTo(id, DockSide.right);
+    }
+  }
 
   // ------------------------------------------------------------ open/close
 
@@ -130,7 +216,7 @@ class WindowManager extends ChangeNotifier {
     } else {
       final step = 26.0 * (_cascade % 8);
       _cascade++;
-      pos = Offset(60 + step, 40 + step);
+      pos = Offset(workArea.left + 60 + step, 40 + step);
     }
     w.rect = _fit(pos & size);
     _opened.add(w);
@@ -265,7 +351,7 @@ class WindowManager extends ChangeNotifier {
 
   void maximize(String id) {
     final w = byId(id);
-    if (w == null || !w.canMaximize) return;
+    if (w == null || !w.canMaximize || w.dock != DockSide.none) return;
     w.maximized = true;
     w.minimized = false;
     notifyListeners();
@@ -333,6 +419,17 @@ class WindowManager extends ChangeNotifier {
   void moveBy(String id, Offset delta) {
     final w = byId(id);
     if (w == null || w.maximized) return;
+    if (w.dock != DockSide.none) {
+      // Pulling a docked window away from its edge floats it again.
+      final shown = shownRect(w);
+      final sideways = w.dock == DockSide.left ? delta.dx > 0 : delta.dx < 0;
+      if (!sideways && delta.dy.abs() < 1) return;
+      _undock(w, notify: false);
+      w.rect = _fit(Rect.fromLTWH(shown.left + delta.dx, math.max(0, delta.dy), w.rect.width, w.rect.height));
+      notifyListeners();
+      onDockChanged?.call(w);
+      return;
+    }
     w.rect = _fit(w.rect.shift(delta));
     notifyListeners();
   }
@@ -340,6 +437,16 @@ class WindowManager extends ChangeNotifier {
   void resizeBy(String id, int edges, Offset d) {
     final w = byId(id);
     if (w == null || w.maximized || !w.resizable) return;
+    if (w.dock != DockSide.none) {
+      // Only the inside edge moves; the width is all that changes.
+      final dx = w.dock == DockSide.left
+          ? (edges & Edge.right != 0 ? d.dx : 0.0)
+          : (edges & Edge.left != 0 ? -d.dx : 0.0);
+      final width = (w.rect.width + dx).clamp(w.minSize.width, desk.width / 2).toDouble();
+      w.rect = Rect.fromLTWH(w.rect.left, w.rect.top, width, w.rect.height);
+      notifyListeners();
+      return;
+    }
     var l = w.rect.left, t = w.rect.top, r = w.rect.right, b = w.rect.bottom;
     if (edges & Edge.left != 0) l = math.min(l + d.dx, r - w.minSize.width);
     if (edges & Edge.right != 0) r = math.max(r + d.dx, l + w.minSize.width);
@@ -370,10 +477,10 @@ class WindowManager extends ChangeNotifier {
   /// The window menu's entries for [w]: (label, mnemonic index, enabled).
   List<MenuEntry> menuEntries(DeskWindow w) => [
         MenuEntry('Restore', 0, w.maximized || w.minimized, MenuAction.restore),
-        MenuEntry('Move', 0, !w.maximized, MenuAction.move),
-        MenuEntry('Size', 0, !w.maximized && w.resizable, MenuAction.size),
+        MenuEntry('Move', 0, !w.maximized && w.dock == DockSide.none, MenuAction.move),
+        MenuEntry('Size', 0, !w.maximized && w.resizable && w.dock == DockSide.none, MenuAction.size),
         MenuEntry('Minimize', 2, w.canMinimize, MenuAction.minimize),
-        MenuEntry('Maximize', 2, w.canMaximize && !w.maximized, MenuAction.maximize),
+        MenuEntry('Maximize', 2, w.canMaximize && !w.maximized && w.dock == DockSide.none, MenuAction.maximize),
         MenuEntry('Close', 0, true, MenuAction.close, shortcut: 'Alt+F4', bold: true, separatorBefore: true),
       ];
 

@@ -110,4 +110,31 @@ void main() {
     expect(wm.zOrder.last.id, 'mini');
     expect(wm.activeId, 'a');
   });
+
+  test('docking the buddy list', () {
+    final wm = WindowManager()..desk = const Size(1000, 700);
+    final bl = DeskWindow(
+      id: 'bl',
+      title: 'bl',
+      icon: const IconData(0xe000),
+      content: (c, w) => const SizedBox(),
+      size: const Size(250, 500),
+      dockable: true,
+    );
+    wm.open(bl);
+    wm.open(win('a'));
+    wm.dockTo('bl', DockSide.right);
+    expect(wm.shownRect(bl), const Rect.fromLTWH(750, 0, 250, 700));
+    expect(wm.workArea, const Rect.fromLTWH(0, 0, 750, 700));
+    wm.maximize('a');
+    expect(wm.shownRect(wm.byId('a')!), const Rect.fromLTWH(0, 0, 750, 700));
+    wm.resizeBy('bl', Edge.left, const Offset(-50, 0));
+    expect(wm.shownRect(bl).width, 300);
+    wm.dockTo('bl', DockSide.none);
+    expect(bl.dock, DockSide.none);
+    expect(wm.workArea.width, 1000);
+    // Ordinary windows can't dock.
+    wm.dockTo('a', DockSide.left);
+    expect(wm.byId('a')!.dock, DockSide.none);
+  });
 }

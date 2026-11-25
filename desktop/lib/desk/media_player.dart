@@ -1,0 +1,1029 @@
+import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
+import 'dart:math' as math;
+
+import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:video_player/video_player.dart';
+
+import 'media_library.dart';
+import 'window_manager.dart';
+import 'xp_theme.dart';
+
+export 'media_library.dart';
+
+enum Repeat { off, all, one }
+
+// ======================================================================
+// Playback (the desktop's own player; keeps going when its window closes)
+
+class DeskPlayer extends ChangeNotifier {
+  DeskPlayer._() {
+    unawaited(_loadPrefs());
+  }
+  static final instance = DeskPlayer._();
+
+  List<MediaItem> queue = const [];
+  List<MediaItem> _original = const [];
+  int index = -1;
+  bool shuffle = false;
+  Repeat repeat = Repeat.off;
+  double volume = 1;
+  bool muted = false;
+  String? error;
+
+  VideoPlayerController? controller;
+  bool _ending = false;
+  int _loadSerial = 0;
+
+  /// Play counts, for "Most played".
+  Map<String, int> plays = {};
+
+  MediaItem? get current => index >= 0 && index < queue.length ? queue[index] : null;
+  bool get playing => controller?.value.isPlaying ?? false;
+  Duration get position => controller?.value.position ?? Duration.zero;
+  Duration get duration {
+    final d = controller?.value.duration ?? Duration.zero;
+    if (d > Duration.zero) return d;
+    return Duration(milliseconds: current?.durationMs ?? 0);
+  }
+
+  bool get isVideo => current?.video ?? false;
+
+  Future<void> _loadPrefs() async {
+    final p = await SharedPreferences.getInstance();
+    volume = p.getDouble('playerVolume') ?? 1;
+    shuffle = p.getBool('playerShuffle') ?? false;
+    repeat = Repeat.values.firstWhere((r) => r.name == p.getString('playerRepeat'), orElse: () => Repeat.off);
+    try {
+      plays = Map<String, int>.from(jsonDecode(p.getString('playerPlays') ?? '{}') as Map);
+    } catch (_) {}
+    notifyListeners();
+  }
+
+  Future<void> _savePrefs() async {
+    final p = await SharedPreferences.getInstance();
+    await p.setDouble('playerVolume', volume);
+    await p.setBool('playerShuffle', shuffle);
+    await p.setString('playerRepeat', repeat.name);
+    await p.setString('playerPlays', jsonEncode(plays));
+  }
+
+  int playsOf(MediaItem m) => plays[m.key] ?? 0;
+
+  /// Plays [list] from [start].
+  Future<void> play(List<MediaItem> list, int start, {bool? shuffled}) async {
+    if (list.isEmpty) return;
+    final s = start.clamp(0, list.length - 1);
+    _original = List.of(list);
+    if (shuffled != null) shuffle = shuffled;
+    if (shuffle) {
+      final first = list[s];
+      final rest = List.of(list)..removeAt(s);
+      rest.shuffle(math.Random());
+      queue = [first, ...rest];
+      index = 0;
+    } else {
+      queue = List.of(list);
+      index = s;
+    }
+    await _load(autoplay: true);
+  }
+
+  Future<void> playOne(MediaItem m) => play([m], 0, shuffled: false);
+
+  Future<void> playFile(String path, {required bool video}) => playOne(MediaItem.fromPath(path, video: video));
+
+  Future<void> _load({required bool autoplay}) async {
+    final serial = ++_loadSerial;
+    final old = controller;
+    controller = null;
+    old?.removeListener(_onTick);
+    unawaited(old?.dispose());
+    error = null;
+    _ending = false;
+    notifyListeners();
+    final m = current;
+    if (m == null) return;
+    final VideoPlayerController c;
+    final opts = VideoPlayerOptions(allowBackgroundPlayback: !m.video, mixWithOthers: false);
+    if (m.uri.isNotEmpty && !kIsWeb && Platform.isAndroid) {
+      c = VideoPlayerController.contentUri(Uri.parse(m.uri), videoPlayerOptions: opts);
+    } else {
+      c = VideoPlayerController.file(File(m.path), videoPlayerOptions: opts);
+    }
+    try {
+      await c.initialize();
+    } catch (e) {
+      await c.dispose();
+      if (serial != _loadSerial) return;
+      error = "Can't play '${m.title}'.";
+      notifyListeners();
+      // Skip to the next one after a broken file, like a real player.
+      if (queue.length > 1 && index < queue.length - 1) {
+        Timer(const Duration(seconds: 2), () {
+          if (serial == _loadSerial) unawaited(next());
+        });
+      }
+      return;
+    }
+    if (serial != _loadSerial) {
+      await c.dispose();
+      return;
+    }
+    controller = c;
+    await c.setVolume(muted ? 0 : volume);
+    c.addListener(_onTick);
+    if (autoplay) await c.play();
+    plays[m.key] = (plays[m.key] ?? 0) + 1;
+    unawaited(_savePrefs());
+    notifyListeners();
+  }
+
+  void _onTick() {
+    final c = controller;
+    if (c == null) return;
+    final v = c.value;
+    if (v.hasError && error == null) {
+      error = v.errorDescription ?? "Can't play this file.";
+    }
+    final done = v.duration > Duration.zero && v.position >= v.duration - const Duration(milliseconds: 200) && !v.isPlaying;
+    if (done && !_ending) {
+      _ending = true;
+      scheduleMicrotask(_finished);
+    }
+    notifyListeners();
+  }
+
+  Future<void> _finished() async {
+    if (repeat == Repeat.one) {
+      await seek(Duration.zero);
+      await controller?.play();
+      _ending = false;
+      return;
+    }
+    if (index < queue.length - 1) {
+      index++;
+      await _load(autoplay: true);
+    } else if (repeat == Repeat.all && queue.isNotEmpty) {
+      index = 0;
+      await _load(autoplay: true);
+    } else {
+      notifyListeners();
+    }
+  }
+
+  Future<void> toggle() async {
+    final c = controller;
+    if (c == null) {
+      if (current != null) await _load(autoplay: true);
+      return;
+    }
+    if (c.value.isPlaying) {
+      await c.pause();
+    } else {
+      if (c.value.position >= c.value.duration && c.value.duration > Duration.zero) await c.seekTo(Duration.zero);
+      _ending = false;
+      await c.play();
+    }
+    notifyListeners();
+  }
+
+  Future<void> pause() async {
+    await controller?.pause();
+    notifyListeners();
+  }
+
+  Future<void> stop() async {
+    await controller?.pause();
+    await controller?.seekTo(Duration.zero);
+    notifyListeners();
+  }
+
+  Future<void> next() async {
+    if (queue.isEmpty) return;
+    if (index < queue.length - 1) {
+      index++;
+    } else if (repeat == Repeat.all) {
+      index = 0;
+    } else {
+      return;
+    }
+    await _load(autoplay: true);
+  }
+
+  Future<void> previous() async {
+    if (queue.isEmpty) return;
+    // Back to the start of the song first, like most players.
+    if (position > const Duration(seconds: 3) || index == 0) {
+      await seek(Duration.zero);
+      return;
+    }
+    index--;
+    await _load(autoplay: true);
+  }
+
+  Future<void> jump(int i) async {
+    if (i < 0 || i >= queue.length) return;
+    index = i;
+    await _load(autoplay: true);
+  }
+
+  Future<void> seek(Duration d) async {
+    _ending = false;
+    await controller?.seekTo(d);
+    notifyListeners();
+  }
+
+  Future<void> setVolume(double v) async {
+    volume = v.clamp(0.0, 1.0);
+    muted = false;
+    await controller?.setVolume(volume);
+    unawaited(_savePrefs());
+    notifyListeners();
+  }
+
+  Future<void> toggleMute() async {
+    muted = !muted;
+    await controller?.setVolume(muted ? 0 : volume);
+    notifyListeners();
+  }
+
+  void setShuffle(bool on) {
+    shuffle = on;
+    final cur = current;
+    if (cur != null) {
+      if (on) {
+        final rest = List.of(queue)..removeAt(index);
+        rest.shuffle(math.Random());
+        if (_original.isEmpty) _original = List.of(queue);
+        queue = [cur, ...rest];
+        index = 0;
+      } else if (_original.isNotEmpty) {
+        queue = List.of(_original);
+        index = math.max(0, queue.indexWhere((m) => m.key == cur.key));
+      }
+    }
+    unawaited(_savePrefs());
+    notifyListeners();
+  }
+
+  void cycleRepeat() {
+    repeat = Repeat.values[(repeat.index + 1) % Repeat.values.length];
+    unawaited(_savePrefs());
+    notifyListeners();
+  }
+
+  void playNext(MediaItem m) {
+    if (queue.isEmpty) {
+      unawaited(playOne(m));
+      return;
+    }
+    queue = [...queue]..insert(index + 1, m);
+    _original = [..._original, m];
+    notifyListeners();
+  }
+
+  void addToQueue(MediaItem m) {
+    if (queue.isEmpty) {
+      unawaited(playOne(m));
+      return;
+    }
+    queue = [...queue, m];
+    _original = [..._original, m];
+    notifyListeners();
+  }
+
+  void removeAt(int i) {
+    if (i == index || i < 0 || i >= queue.length) return;
+    final gone = queue[i];
+    queue = [...queue]..removeAt(i);
+    _original = _original.where((m) => m.key != gone.key).toList();
+    if (i < index) index--;
+    notifyListeners();
+  }
+}
+
+// ======================================================================
+// Shared widgets
+
+String fmt(Duration d) => LibraryOps.formatTime(d.inMilliseconds);
+
+/// Album art / video frame, or a note icon.
+class MediaArt extends StatefulWidget {
+  const MediaArt({super.key, required this.item, this.size = 48});
+  final MediaItem? item;
+  final double size;
+
+  @override
+  State<MediaArt> createState() => _MediaArtState();
+}
+
+class _MediaArtState extends State<MediaArt> {
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  @override
+  void didUpdateWidget(MediaArt old) {
+    super.didUpdateWidget(old);
+    if (old.item?.key != widget.item?.key) _load();
+  }
+
+  void _load() {
+    final i = widget.item;
+    if (i == null) return;
+    MediaLibrary.instance.loadArt(i).then((_) {
+      if (mounted) setState(() {});
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final i = widget.item;
+    final bytes = i == null ? null : MediaLibrary.instance.artFor(i);
+    return Container(
+      width: widget.size,
+      height: widget.size,
+      decoration: BoxDecoration(
+        color: const Color(0xFF1E3E9B),
+        border: Border.all(color: const Color(0xFF7F9DB9)),
+      ),
+      child: bytes != null
+          ? Image.memory(bytes, fit: BoxFit.cover, gaplessPlayback: true)
+          : Icon(i?.video == true ? Icons.movie : Icons.music_note, size: widget.size * 0.5, color: Colors.white70),
+    );
+  }
+}
+
+class RoundButton extends StatelessWidget {
+  const RoundButton({super.key, required this.icon, required this.tip, required this.onTap, this.size = 28, this.on = false});
+  final IconData icon;
+  final String tip;
+  final VoidCallback? onTap;
+  final double size;
+  final bool on;
+
+  @override
+  Widget build(BuildContext context) => Tooltip(
+        message: tip,
+        child: GestureDetector(
+          onTap: onTap,
+          child: Container(
+            width: size,
+            height: size,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              border: Border.all(color: Xp.buttonBorder),
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: on
+                    ? const [Color(0xFFBFD6FF), Color(0xFF8DB2F2)]
+                    : const [Color(0xFFFFFFFF), Color(0xFFECEBE6), Color(0xFFD6D0C5)],
+              ),
+            ),
+            child: Icon(icon, size: size * 0.62, color: onTap == null ? const Color(0xFFAAAAAA) : const Color(0xFF1E3E9B)),
+          ),
+        ),
+      );
+}
+
+/// Position slider with times, used by both players.
+class SeekBar extends StatefulWidget {
+  const SeekBar({super.key, required this.player, this.light = false});
+  final DeskPlayer player;
+  final bool light;
+
+  @override
+  State<SeekBar> createState() => _SeekBarState();
+}
+
+class _SeekBarState extends State<SeekBar> {
+  double? _drag;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = widget.player;
+    final dur = p.duration.inMilliseconds.toDouble();
+    final pos = (_drag ?? p.position.inMilliseconds.toDouble()).clamp(0.0, dur > 0 ? dur : 1.0).toDouble();
+    final style = Xp.text.copyWith(fontSize: 11, color: widget.light ? Colors.white : null);
+    return Row(children: [
+      Text(LibraryOps.formatTime(pos.round()), style: style),
+      Expanded(
+        child: SizedBox(
+          height: 22,
+          child: SliderTheme(
+            data: SliderTheme.of(context).copyWith(
+              trackHeight: 3,
+              thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
+              overlayShape: const RoundSliderOverlayShape(overlayRadius: 10),
+              activeTrackColor: widget.light ? const Color(0xFF8FD14F) : Xp.selection,
+              thumbColor: widget.light ? Colors.white : Xp.selection,
+            ),
+            child: Slider(
+              value: pos,
+              min: 0,
+              max: dur > 0 ? dur : 1,
+              onChanged: dur > 0 ? (v) => setState(() => _drag = v) : null,
+              onChangeEnd: dur > 0
+                  ? (v) {
+                      setState(() => _drag = null);
+                      p.seek(Duration(milliseconds: v.round()));
+                    }
+                  : null,
+            ),
+          ),
+        ),
+      ),
+      Text(dur > 0 ? LibraryOps.formatTime(dur.round()) : '', style: style),
+    ]);
+  }
+}
+
+// ======================================================================
+// Media Player window
+
+const kMediaPlayerId = 'mediaplayer';
+
+DeskWindow mediaPlayerWindow({int tab = 0}) => DeskWindow(
+      id: kMediaPlayerId,
+      title: 'Media Player',
+      icon: Icons.play_circle,
+      size: const Size(900, 600),
+      minSize: const Size(520, 360),
+      content: (c, w) => _PlayerWindow(w: w, startTab: tab),
+    );
+
+class _PlayerWindow extends StatefulWidget {
+  const _PlayerWindow({required this.w, required this.startTab});
+  final DeskWindow w;
+  final int startTab;
+
+  @override
+  State<_PlayerWindow> createState() => _PlayerWindowState();
+}
+
+enum _Tab { nowPlaying, library, videos }
+
+class _PlayerWindowState extends State<_PlayerWindow> {
+  final lib = MediaLibrary.instance;
+  final player = DeskPlayer.instance;
+  late _Tab _tab = _Tab.values[widget.startTab.clamp(0, 2)];
+  GroupBy _group = GroupBy.songs;
+  Bucket? _bucket;
+  SortBy _sort = SortBy.artist;
+  final _search = TextEditingController();
+  String? _selected;
+
+  @override
+  void initState() {
+    super.initState();
+    if (!lib.scanned) unawaited(lib.scan());
+    if (player.current == null && widget.startTab == 0) _tab = _Tab.library;
+  }
+
+  @override
+  void dispose() {
+    _search.dispose();
+    super.dispose();
+  }
+
+  List<MediaItem> _visibleSongs() {
+    var list = _bucket?.items ?? lib.songs;
+    list = LibraryOps.search(list, _search.text);
+    if (_bucket == null) list = LibraryOps.sort(list, _sort, plays: player.playsOf);
+    return list;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: Listenable.merge([lib, player]),
+      builder: (c, _) {
+        final wm = context.read<WindowManager>();
+        final cur = player.current;
+        final title = cur == null ? 'Media Player' : '${cur.title} - Media Player';
+        if (widget.w.title != title) scheduleMicrotask(() => wm.setTitle(widget.w.id, title));
+        return Container(
+          color: const Color(0xFF1D2B53),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            Expanded(
+              child: Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                _sidebar(),
+                Expanded(
+                  child: Container(
+                    margin: const EdgeInsets.fromLTRB(0, 6, 6, 0),
+                    decoration: BoxDecoration(
+                      color: _tab == _Tab.nowPlaying ? Colors.black : Colors.white,
+                      border: Border.all(color: const Color(0xFF6C86C9)),
+                    ),
+                    child: switch (_tab) {
+                      _Tab.nowPlaying => _nowPlaying(),
+                      _Tab.library => _library(),
+                      _Tab.videos => _videos(),
+                    },
+                  ),
+                ),
+              ]),
+            ),
+            _transport(),
+          ]),
+        );
+      },
+    );
+  }
+
+  // ------------------------------------------------------------ sidebar
+
+  Widget _sidebar() {
+    Widget item(_Tab t, IconData icon, String label) {
+      final on = _tab == t;
+      return GestureDetector(
+        onTap: () => setState(() => _tab = t),
+        child: Container(
+          margin: const EdgeInsets.fromLTRB(6, 6, 6, 0),
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(4),
+            gradient: on ? const LinearGradient(colors: [Color(0xFF4F7BE0), Color(0xFF2B55B8)]) : null,
+          ),
+          child: Row(children: [
+            Icon(icon, size: 20, color: Colors.white),
+            const SizedBox(width: 8),
+            Expanded(child: Text(label, style: const TextStyle(color: Colors.white, fontSize: 13))),
+          ]),
+        ),
+      );
+    }
+
+    return Container(
+      width: 150,
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+            begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [Color(0xFF3A5CB0), Color(0xFF1D2B53)]),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        item(_Tab.nowPlaying, Icons.graphic_eq, 'Now Playing'),
+        item(_Tab.library, Icons.library_music, 'Music Library'),
+        item(_Tab.videos, Icons.video_library, 'Videos'),
+        const Spacer(),
+        Padding(
+          padding: const EdgeInsets.all(8),
+          child: Text(
+              lib.scanning
+                  ? 'Reading library...'
+                  : '${lib.songs.length} songs\n${lib.videos.length} videos',
+              style: const TextStyle(color: Colors.white70, fontSize: 11)),
+        ),
+      ]),
+    );
+  }
+
+  // ------------------------------------------------------------ now playing
+
+  Widget _nowPlaying() {
+    final cur = player.current;
+    final c = player.controller;
+    Widget stage;
+    if (cur == null) {
+      stage = const Center(child: Text('Nothing playing. Pick something from the Music Library.', style: TextStyle(color: Colors.white70)));
+    } else if (cur.video && c != null && c.value.isInitialized) {
+      stage = GestureDetector(
+        onTap: player.toggle,
+        onDoubleTap: () => context.read<WindowManager>().toggleMaximize(widget.w.id),
+        child: Center(child: AspectRatio(aspectRatio: c.value.aspectRatio, child: VideoPlayer(c))),
+      );
+    } else {
+      stage = Center(
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          MediaArt(item: cur, size: 220),
+          const SizedBox(height: 12),
+          Text(cur.title, style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+          if (cur.subtitle.isNotEmpty) Text(cur.subtitle, style: const TextStyle(color: Colors.white70, fontSize: 13)),
+          if (player.error != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Text(player.error!, style: const TextStyle(color: Color(0xFFFF8A80))),
+            ),
+        ]),
+      );
+    }
+    final showQueue = player.queue.length > 1 && !(cur?.video ?? false);
+    return Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      Expanded(child: stage),
+      if (showQueue)
+        Container(
+          width: 250,
+          color: const Color(0xFF101830),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            const Padding(
+              padding: EdgeInsets.all(8),
+              child: Text('Up next', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+            ),
+            Expanded(
+              child: ListView.builder(
+                itemCount: player.queue.length,
+                itemBuilder: (c, i) {
+                  final m = player.queue[i];
+                  final now = i == player.index;
+                  return GestureDetector(
+                    onDoubleTap: () => player.jump(i),
+                    onSecondaryTapUp: (d) => _queueMenu(i, d.globalPosition),
+                    onLongPressStart: (d) => _queueMenu(i, d.globalPosition),
+                    child: Container(
+                      color: now ? const Color(0xFF2B55B8) : null,
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      child: Row(children: [
+                        SizedBox(
+                          width: 18,
+                          child: now ? const Icon(Icons.play_arrow, size: 14, color: Color(0xFF8FD14F)) : null,
+                        ),
+                        Expanded(
+                          child: Text(m.title,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(color: now ? Colors.white : Colors.white70, fontSize: 12)),
+                        ),
+                        Text(m.durationMs > 0 ? LibraryOps.formatTime(m.durationMs) : '',
+                            style: const TextStyle(color: Colors.white54, fontSize: 11)),
+                      ]),
+                    ),
+                  );
+                },
+              ),
+            ),
+          ]),
+        ),
+    ]);
+  }
+
+  Future<void> _queueMenu(int i, Offset at) async {
+    final v = await showMenu<String>(
+      context: context,
+      position: RelativeRect.fromLTRB(at.dx, at.dy, at.dx + 1, at.dy + 1),
+      items: const [
+        PopupMenuItem(value: 'play', child: Text('Play', style: Xp.textBold)),
+        PopupMenuItem(value: 'remove', child: Text('Remove from list', style: Xp.text)),
+      ],
+    );
+    if (v == 'play') unawaited(player.jump(i));
+    if (v == 'remove') player.removeAt(i);
+  }
+
+  // ------------------------------------------------------------ library
+
+  Widget _permissionNote() => Center(
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          const Text('The player needs permission to see your music and videos.', style: Xp.text),
+          const SizedBox(height: 8),
+          XpButton(
+              label: 'Allow...',
+              isDefault: true,
+              onPressed: () async {
+                await lib.askPermission();
+                // The answer comes back when Android's box closes.
+                Timer(const Duration(seconds: 3), () => lib.scan());
+              }),
+        ]),
+      );
+
+  Widget _toolbar({required bool songs}) {
+    return Container(
+      padding: const EdgeInsets.all(6),
+      color: const Color(0xFFECE9D8),
+      child: Row(children: [
+        if (songs) ...[
+          for (final g in GroupBy.values)
+            Padding(
+              padding: const EdgeInsets.only(right: 4),
+              child: GestureDetector(
+                onTap: () => setState(() {
+                  _group = g;
+                  _bucket = null;
+                }),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: _group == g ? const Color(0xFFC1D2EE) : null,
+                    border: Border.all(color: _group == g ? Xp.selection : Colors.transparent),
+                    borderRadius: BorderRadius.circular(3),
+                  ),
+                  child: Text(g.label, style: Xp.text.copyWith(fontSize: 12)),
+                ),
+              ),
+            ),
+          const Spacer(),
+          if (_group == GroupBy.songs || _bucket != null) ...[
+            const Text('Sort:', style: Xp.text),
+            const SizedBox(width: 4),
+            PopupMenuButton<SortBy>(
+              tooltip: 'Sort by',
+              onSelected: (s) => setState(() => _sort = s),
+              itemBuilder: (_) => [
+                for (final s in SortBy.values) PopupMenuItem(value: s, child: Text(s.label, style: Xp.text)),
+              ],
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(color: Colors.white, border: Border.all(color: Xp.fieldBorder)),
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  Text(_sort.label, style: Xp.text.copyWith(fontSize: 12)),
+                  const Icon(Icons.arrow_drop_down, size: 16),
+                ]),
+              ),
+            ),
+            const SizedBox(width: 8),
+          ],
+        ] else
+          const Spacer(),
+        SizedBox(
+          width: 170,
+          child: XpField(controller: _search, hint: 'Search', onChanged: (_) => setState(() {})),
+        ),
+        const SizedBox(width: 4),
+        Tooltip(
+          message: 'Read the library again',
+          child: GestureDetector(onTap: lib.scan, child: const Icon(Icons.refresh, size: 18, color: Color(0xFF1E3E9B))),
+        ),
+      ]),
+    );
+  }
+
+  Widget _library() {
+    if (lib.scanned && !lib.permission) return _permissionNote();
+    final body = (_group == GroupBy.songs || _bucket != null || _search.text.trim().isNotEmpty)
+        ? _songList(_visibleSongs())
+        : _buckets(LibraryOps.group(lib.songs, _group));
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      _toolbar(songs: true),
+      if (_bucket != null)
+        Container(
+          padding: const EdgeInsets.fromLTRB(8, 6, 8, 6),
+          color: const Color(0xFFF4F6FB),
+          child: Row(children: [
+            GestureDetector(
+              onTap: () => setState(() => _bucket = null),
+              child: Row(children: [
+                const Icon(Icons.arrow_back, size: 16, color: Color(0xFF0C32A4)),
+                const SizedBox(width: 4),
+                Text(_group.label, style: Xp.text.copyWith(color: const Color(0xFF0C32A4))),
+              ]),
+            ),
+            const SizedBox(width: 12),
+            MediaArt(item: _bucket!.cover, size: 36),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(_bucket!.name, style: Xp.textBold, overflow: TextOverflow.ellipsis),
+                Text(_bucket!.sub, style: Xp.textGrey.copyWith(fontSize: 11), overflow: TextOverflow.ellipsis),
+              ]),
+            ),
+            XpButton(label: 'Play All', onPressed: () => player.play(_bucket!.items, 0, shuffled: false)),
+            const SizedBox(width: 4),
+            XpButton(label: 'Shuffle', onPressed: () => player.play(_bucket!.items, 0, shuffled: true)),
+          ]),
+        ),
+      Expanded(child: body),
+    ]);
+  }
+
+  Widget _buckets(List<Bucket> list) {
+    if (lib.scanning && list.isEmpty) return const Center(child: Text('Reading library...', style: Xp.textGrey));
+    if (list.isEmpty) return const Center(child: Text('No music found.', style: Xp.textGrey));
+    return LayoutBuilder(builder: (c, box) {
+      final cols = math.max(1, (box.maxWidth / 150).floor());
+      return GridView.builder(
+        padding: const EdgeInsets.all(8),
+        gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: cols, mainAxisExtent: 170),
+        itemCount: list.length,
+        itemBuilder: (c, i) {
+          final b = list[i];
+          return GestureDetector(
+            onTap: () => setState(() {
+              _bucket = b;
+              _search.clear();
+            }),
+            onDoubleTap: () => player.play(b.items, 0),
+            child: Padding(
+              padding: const EdgeInsets.all(6),
+              child: Column(children: [
+                MediaArt(item: b.cover, size: 110),
+                const SizedBox(height: 4),
+                Text(b.name, style: Xp.textBold.copyWith(fontSize: 12), maxLines: 1, overflow: TextOverflow.ellipsis),
+                Text(b.sub, style: Xp.textGrey.copyWith(fontSize: 11), maxLines: 1, overflow: TextOverflow.ellipsis),
+              ]),
+            ),
+          );
+        },
+      );
+    });
+  }
+
+  Widget _songList(List<MediaItem> list) {
+    if (lib.scanning && list.isEmpty) return const Center(child: Text('Reading library...', style: Xp.textGrey));
+    if (list.isEmpty) {
+      return Center(
+          child: Text(lib.songs.isEmpty ? 'No music found on this device.' : 'Nothing matches.', style: Xp.textGrey));
+    }
+    Widget head(String t, {int flex = 3}) => Expanded(
+          flex: flex,
+          child: Container(
+            height: 22,
+            padding: const EdgeInsets.symmetric(horizontal: 6),
+            alignment: Alignment.centerLeft,
+            decoration: const BoxDecoration(
+              color: Color(0xFFEBEADB),
+              border: Border(right: BorderSide(color: Color(0xFFC7C5B2)), bottom: BorderSide(color: Color(0xFFC7C5B2))),
+            ),
+            child: Text(t, style: Xp.text.copyWith(fontSize: 12)),
+          ),
+        );
+    final cur = player.current?.key;
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      Row(children: [head('Title', flex: 4), head('Artist'), head('Album'), head('Length', flex: 1)]),
+      Expanded(
+        child: ListView.builder(
+          itemExtent: 24,
+          itemCount: list.length,
+          itemBuilder: (c, i) {
+            final m = list[i];
+            final sel = _selected == m.key;
+            final playing = cur == m.key;
+            final style = Xp.text.copyWith(
+                fontSize: 12,
+                color: sel ? Colors.white : (playing ? const Color(0xFF0C32A4) : null),
+                fontWeight: playing ? FontWeight.bold : null);
+            Widget cell(String t, {int flex = 3}) => Expanded(
+                  flex: flex,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 6),
+                    child: Text(t, style: style, maxLines: 1, overflow: TextOverflow.ellipsis),
+                  ),
+                );
+            return GestureDetector(
+              onTap: () => setState(() => _selected = m.key),
+              onDoubleTap: () => player.play(list, i),
+              onSecondaryTapUp: (d) => _songMenu(list, i, d.globalPosition),
+              onLongPressStart: (d) => _songMenu(list, i, d.globalPosition),
+              child: Container(
+                color: sel ? Xp.selection : (i.isOdd ? const Color(0xFFF7F7F7) : Colors.white),
+                child: Row(children: [
+                  cell(m.title, flex: 4),
+                  cell(m.artist),
+                  cell(m.video ? '' : m.album),
+                  cell(m.durationMs > 0 ? LibraryOps.formatTime(m.durationMs) : '', flex: 1),
+                ]),
+              ),
+            );
+          },
+        ),
+      ),
+    ]);
+  }
+
+  Future<void> _songMenu(List<MediaItem> list, int i, Offset at) async {
+    final m = list[i];
+    setState(() => _selected = m.key);
+    final v = await showMenu<String>(
+      context: context,
+      position: RelativeRect.fromLTRB(at.dx, at.dy, at.dx + 1, at.dy + 1),
+      items: const [
+        PopupMenuItem(value: 'play', child: Text('Play', style: Xp.textBold)),
+        PopupMenuItem(value: 'next', child: Text('Play Next', style: Xp.text)),
+        PopupMenuItem(value: 'queue', child: Text('Add to Now Playing', style: Xp.text)),
+      ],
+    );
+    switch (v) {
+      case 'play':
+        unawaited(player.play(list, i));
+      case 'next':
+        player.playNext(m);
+      case 'queue':
+        player.addToQueue(m);
+    }
+  }
+
+  // ------------------------------------------------------------ videos
+
+  Widget _videos() {
+    if (lib.scanned && !lib.permission) return _permissionNote();
+    final list = LibraryOps.search(lib.videos, _search.text);
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      _toolbar(songs: false),
+      Expanded(
+        child: list.isEmpty
+            ? Center(child: Text(lib.scanning ? 'Reading library...' : 'No videos found.', style: Xp.textGrey))
+            : LayoutBuilder(builder: (c, box) {
+                final cols = math.max(1, (box.maxWidth / 190).floor());
+                return GridView.builder(
+                  padding: const EdgeInsets.all(8),
+                  gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: cols, mainAxisExtent: 150),
+                  itemCount: list.length,
+                  itemBuilder: (c, i) {
+                    final m = list[i];
+                    return GestureDetector(
+                      onDoubleTap: () {
+                        unawaited(player.play(list, i, shuffled: false));
+                        setState(() => _tab = _Tab.nowPlaying);
+                      },
+                      child: Padding(
+                        padding: const EdgeInsets.all(6),
+                        child: Column(children: [
+                          SizedBox(
+                            width: 170,
+                            height: 100,
+                            child: Stack(fit: StackFit.expand, children: [
+                              FittedBox(fit: BoxFit.cover, clipBehavior: Clip.hardEdge, child: MediaArt(item: m, size: 170)),
+                              Positioned(
+                                right: 4,
+                                bottom: 4,
+                                child: Container(
+                                  color: const Color(0xAA000000),
+                                  padding: const EdgeInsets.symmetric(horizontal: 4),
+                                  child: Text(LibraryOps.formatTime(m.durationMs),
+                                      style: const TextStyle(color: Colors.white, fontSize: 11)),
+                                ),
+                              ),
+                            ]),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(m.title, style: Xp.text.copyWith(fontSize: 12), maxLines: 2, overflow: TextOverflow.ellipsis),
+                        ]),
+                      ),
+                    );
+                  },
+                );
+              }),
+      ),
+    ]);
+  }
+
+  // ------------------------------------------------------------ transport
+
+  Widget _transport() {
+    final p = player;
+    final cur = p.current;
+    return Container(
+      padding: const EdgeInsets.fromLTRB(10, 6, 10, 6),
+      child: Column(mainAxisSize: MainAxisSize.min, children: [
+        SeekBar(player: p, light: true),
+        Row(children: [
+          RoundButton(icon: Icons.shuffle, tip: 'Shuffle', on: p.shuffle, onTap: () => p.setShuffle(!p.shuffle)),
+          const SizedBox(width: 4),
+          RoundButton(
+              icon: p.repeat == Repeat.one ? Icons.repeat_one : Icons.repeat,
+              tip: switch (p.repeat) {
+                Repeat.off => 'Repeat: off',
+                Repeat.all => 'Repeat: all',
+                Repeat.one => 'Repeat: this song',
+              },
+              on: p.repeat != Repeat.off,
+              onTap: p.cycleRepeat),
+          const SizedBox(width: 14),
+          RoundButton(icon: Icons.stop, tip: 'Stop', onTap: cur == null ? null : p.stop),
+          const SizedBox(width: 4),
+          RoundButton(icon: Icons.skip_previous, tip: 'Previous', onTap: cur == null ? null : p.previous),
+          const SizedBox(width: 4),
+          RoundButton(
+              icon: p.playing ? Icons.pause : Icons.play_arrow,
+              tip: p.playing ? 'Pause' : 'Play',
+              size: 40,
+              onTap: cur == null
+                  ? (lib.songs.isEmpty ? null : () => p.play(lib.songs, 0))
+                  : p.toggle),
+          const SizedBox(width: 4),
+          RoundButton(icon: Icons.skip_next, tip: 'Next', onTap: cur == null ? null : p.next),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Text(cur == null ? '' : '${cur.title}${cur.subtitle.isEmpty ? '' : '  -  ${cur.subtitle}'}',
+                style: const TextStyle(color: Colors.white, fontSize: 12),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis),
+          ),
+          GestureDetector(
+            onTap: p.toggleMute,
+            child: Icon(p.muted || p.volume == 0 ? Icons.volume_off : Icons.volume_up, size: 18, color: Colors.white),
+          ),
+          SizedBox(
+            width: 110,
+            child: SliderTheme(
+              data: SliderTheme.of(context).copyWith(
+                trackHeight: 3,
+                thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 5),
+                overlayShape: const RoundSliderOverlayShape(overlayRadius: 8),
+                activeTrackColor: const Color(0xFF8FD14F),
+                thumbColor: Colors.white,
+              ),
+              child: Slider(value: p.muted ? 0 : p.volume, onChanged: p.setVolume),
+            ),
+          ),
+        ]),
+      ]),
+    );
+  }
+}

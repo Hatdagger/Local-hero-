@@ -6,6 +6,7 @@ import 'app/app_state.dart';
 import 'app/input_mode.dart';
 import 'app/settings.dart';
 import 'desk/desk.dart';
+import 'desk/network.dart';
 import 'desk/platform.dart';
 import 'desk/shell.dart';
 import 'desk/updater.dart';
@@ -39,6 +40,7 @@ Future<void> main() async {
         ChangeNotifierProvider.value(value: apps),
         ChangeNotifierProvider.value(value: updater),
         Provider.value(value: desk),
+        ChangeNotifierProvider.value(value: desk.desktop),
       ],
       child: const DeskApp(),
     ),
@@ -68,6 +70,8 @@ class _DeskAppState extends State<DeskApp> {
       if (s == AppLifecycleState.resumed) {
         SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
         context.read<AppList>().load(force: true);
+        context.read<Desk>().desktop.load();
+        NetState.instance.refresh();
       }
     });
   }

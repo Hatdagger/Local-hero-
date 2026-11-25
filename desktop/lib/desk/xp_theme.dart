@@ -62,7 +62,7 @@ class XpButton extends StatelessWidget {
   Widget build(BuildContext context) {
     final enabled = onPressed != null;
     return MouseRegion(
-      cursor: enabled ? SystemMouseCursors.click : SystemMouseCursors.basic,
+      cursor: SystemMouseCursors.basic,
       child: GestureDetector(
         onTap: onPressed,
         child: Container(

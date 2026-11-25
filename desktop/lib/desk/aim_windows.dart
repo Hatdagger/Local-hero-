@@ -174,6 +174,7 @@ DeskWindow buddyListWindow(String me) => DeskWindow(
       icon: Icons.people,
       size: const Size(250, 560),
       minSize: const Size(190, 300),
+      dockable: true,
       content: (c, w) => _BuddyList(w: w),
     );
 
@@ -262,6 +263,14 @@ class _BuddyListState extends State<_BuddyList> {
             if (!app.isAway) ('Away Message...', () => desk.openAwayEditor()),
             if (app.isAway) ("I'm Back", () => app.setAway(null)),
             ('Sign Off', () => app.signOff()),
+          ]),
+          _MenuBarButton(label: 'Window', items: [
+            if (widget.w.dock != DockSide.left)
+              ('Dock to Left Side', () => context.read<WindowManager>().dockTo(widget.w.id, DockSide.left)),
+            if (widget.w.dock != DockSide.right)
+              ('Dock to Right Side', () => context.read<WindowManager>().dockTo(widget.w.id, DockSide.right)),
+            if (widget.w.dock != DockSide.none)
+              ('Undock', () => context.read<WindowManager>().dockTo(widget.w.id, DockSide.none)),
           ]),
           _MenuBarButton(label: 'People', items: [
             ('Send Instant Message...', () => desk.openSendIm()),

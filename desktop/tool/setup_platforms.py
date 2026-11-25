@@ -40,7 +40,7 @@ def patch_android():
     pkg = m.group(1)
     folder = os.path.dirname(act)
     for name in ('MainActivity.kt', 'AimConnectionService.kt', 'DeskBridge.kt', 'SwitchWidget.kt',
-                 'UpdateRestartReceiver.kt', 'DeskMedia.kt'):
+                 'UpdateRestartReceiver.kt', 'DeskMedia.kt', 'XpCursor.kt', 'DeskNet.kt', 'DeskLibrary.kt'):
         write(os.path.join(folder, name), read(os.path.join(OVERLAY, name)).replace('__PACKAGE__', pkg))
 
     res_src = os.path.join(OVERLAY, 'res')
@@ -65,6 +65,16 @@ def patch_android():
         'android.permission.REQUEST_INSTALL_PACKAGES',  # in-app updates
         'android.permission.UPDATE_PACKAGES_WITHOUT_USER_ACTION',  # later updates without a prompt (Android 12+)
         'android.permission.MANAGE_EXTERNAL_STORAGE',  # file browser: "All files access"
+        'android.permission.ACCESS_WIFI_STATE',  # Wireless Networks window
+        'android.permission.CHANGE_WIFI_STATE',
+        'android.permission.ACCESS_FINE_LOCATION',  # Android only shows nearby networks with this
+        'android.permission.ACCESS_COARSE_LOCATION',
+        'android.permission.BLUETOOTH_CONNECT',  # Bluetooth Devices window (Android 12+)
+        'android.permission.BLUETOOTH_SCAN',
+        'android.permission.BLUETOOTH',  # the same on Android 11 and older
+        'android.permission.BLUETOOTH_ADMIN',
+        'android.permission.READ_MEDIA_AUDIO',  # media player library (Android 13+)
+        'android.permission.READ_MEDIA_VIDEO',
     ]
     add = ''.join(f'    <uses-permission android:name="{p}"/>\n' for p in perms if f'"{p}"' not in man)
     # Older Android versions use the plain storage permissions instead.

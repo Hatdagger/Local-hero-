@@ -17,7 +17,8 @@ class XpWindowFrame extends StatelessWidget {
   Widget build(BuildContext context) {
     final active = wm.activeId == w.id;
     final r = wm.shownRect(w);
-    final maximized = w.maximized;
+    // Docked windows hug the screen edge like a maximized one.
+    final maximized = w.maximized || w.dock != DockSide.none;
     final frameColor = active ? Xp.frame : Xp.frameInactive;
 
     final body = Container(
@@ -50,11 +51,23 @@ class XpWindowFrame extends StatelessWidget {
         },
         child: Stack(children: [
           Positioned.fill(child: body),
-          if (w.resizable && !maximized) ..._handles(),
+          if (w.resizable && !w.maximized && w.dock == DockSide.none) ..._handles(),
+          if (w.resizable && w.dock == DockSide.left)
+            Positioned(right: 0, top: kTitleHeight, bottom: 0, width: 6, child: _edge(Edge.right)),
+          if (w.resizable && w.dock == DockSide.right)
+            Positioned(left: 0, top: kTitleHeight, bottom: 0, width: 6, child: _edge(Edge.left)),
         ]),
       ),
     );
   }
+
+  Widget _edge(int edges) => MouseRegion(
+        cursor: SystemMouseCursors.resizeLeftRight,
+        child: GestureDetector(
+          behavior: HitTestBehavior.translucent,
+          onPanUpdate: (d) => wm.resizeBy(w.id, edges, d.delta),
+        ),
+      );
 
   List<Widget> _handles() {
     Widget h(int edges, MouseCursor cursor, {double? l, double? t, double? r, double? b, double? width, double? height}) {
@@ -97,8 +110,15 @@ class _TitleBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    Offset? last;
     return GestureDetector(
-      onPanUpdate: (d) => wm.moveBy(w.id, d.delta),
+      onPanUpdate: (d) {
+        last = d.globalPosition;
+        wm.moveBy(w.id, d.delta);
+      },
+      onPanEnd: (_) {
+        if (last != null) wm.dragEnd(w.id, last!);
+      },
       onDoubleTap: w.canMaximize ? () => wm.toggleMaximize(w.id) : null,
       onSecondaryTap: () => wm.openMenu(w.id),
       child: Container(

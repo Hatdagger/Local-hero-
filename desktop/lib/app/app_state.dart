@@ -60,7 +60,17 @@ class BuddyView {
   BuddyView(this.screenName, this.online, this.away, this.idleMinutes, this.icon);
 }
 
+/// A buddy signing on or off (not the burst right after we sign on).
+class BuddyNote {
+  final String screenName;
+  final bool signedOn;
+  const BuddyNote(this.screenName, this.signedOn);
+}
+
 class AppState extends ChangeNotifier {
+  final _buddyNotes = StreamController<BuddyNote>.broadcast();
+  Stream<BuddyNote> get buddyNotes => _buddyNotes.stream;
+
   final AppSettings settings;
   final InputMode input;
   final SoundEngine sounds;
@@ -311,12 +321,18 @@ class AppState extends ChangeNotifier {
         final key = normalizeSn(info.screenName);
         final wasOnline = _wasOnline.contains(key);
         _wasOnline.add(key);
-        if (!wasOnline && !_inInitialBurst) sounds.play(SoundEvent.buddyIn);
+        if (!wasOnline && !_inInitialBurst) {
+          sounds.play(SoundEvent.buddyIn);
+          _buddyNotes.add(BuddyNote(info.screenName, true));
+        }
         final h = info.iconHash;
         if (h != null) _maybeFetchIcon(info.screenName, h);
       case BuddyDeparted(:final screenName):
         final key = normalizeSn(screenName);
-        if (_wasOnline.remove(key)) sounds.play(SoundEvent.buddyOut);
+        if (_wasOnline.remove(key)) {
+          sounds.play(SoundEvent.buddyOut);
+          _buddyNotes.add(BuddyNote(screenName, false));
+        }
       case MessageReceived(:final message):
         _onIncoming(message);
       case TypingChanged(:final screenName, :final state):

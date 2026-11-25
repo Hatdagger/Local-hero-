@@ -67,6 +67,21 @@ class MainActivity : FlutterActivity() {
         super.onCreate(savedInstanceState)
     }
 
+    /**
+     * Flutter puts its view in here; it goes inside a frame that swaps the
+     * mouse pointers for classic ones (see XpCursor.kt).
+     */
+    override fun setContentView(view: android.view.View) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            val frame = XpCursorFrame(this)
+            frame.addView(view, android.widget.FrameLayout.LayoutParams(
+                android.view.ViewGroup.LayoutParams.MATCH_PARENT, android.view.ViewGroup.LayoutParams.MATCH_PARENT))
+            super.setContentView(frame)
+        } else {
+            super.setContentView(view)
+        }
+    }
+
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         if (intent.action == INSTALL_ACTION) {
@@ -81,6 +96,8 @@ class MainActivity : FlutterActivity() {
         super.configureFlutterEngine(flutterEngine)
         DeskBridge.register(this, flutterEngine)
         DeskMedia.register(this, flutterEngine)
+        DeskNet.register(this, flutterEngine)
+        DeskLibrary.register(this, flutterEngine)
         val ch = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "aim/platform")
         channel = ch
         val app = applicationContext

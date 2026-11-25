@@ -10,15 +10,21 @@ import '../oscar/bytes.dart';
 import 'aim_windows.dart';
 import 'browser.dart';
 import 'claude_window.dart';
+import 'desktop_icons.dart';
+import 'network.dart';
 import 'explorer.dart';
+import 'media_player.dart';
 import 'mini_player.dart';
 import 'notepad.dart';
 import 'solitaire.dart';
 import 'updater.dart';
 import 'platform.dart';
 import 'wallpaper.dart';
+import 'toasts.dart';
 import 'window_manager.dart';
 import 'xp_theme.dart';
+
+export 'toasts.dart';
 
 /// Ties the pieces together: opens the desktop's windows, keeps the AIM
 /// windows in step with the connection, and runs Run-box commands.
@@ -26,7 +32,49 @@ class Desk {
   Desk(this.wm, this.app, this.apps) {
     app.addListener(_onApp);
     wm.addListener(_onWm);
+    wm.onDockChanged = _saveDock;
     _loadRunHistory();
+    _loadDock();
+    unawaited(desktop.load());
+    _buddySub = app.buddyNotes.listen(_onBuddyNote);
+  }
+
+  final toasts = Toasts();
+  final desktop = DesktopModel();
+  // ignore: unused_field
+  StreamSubscription<BuddyNote>? _buddySub;
+
+  void _onBuddyNote(BuddyNote n) {
+    if (!n.signedOn) return;
+    toasts.show(DeskToast(
+      title: n.screenName,
+      text: '${n.screenName} has signed on.',
+      icon: Icons.chat_bubble,
+      onTap: () => openIm(n.screenName),
+    ));
+  }
+
+  // ------------------------------------------------------------ Buddy List dock
+
+  DockSide _buddyDock = DockSide.none;
+
+  Future<void> _loadDock() async {
+    final p = await SharedPreferences.getInstance();
+    _buddyDock = DockSide.values.firstWhere((d) => d.name == p.getString('buddyDock'), orElse: () => DockSide.none);
+    if (wm.isOpen(kBuddyListId)) wm.dockTo(kBuddyListId, _buddyDock);
+  }
+
+  Future<void> _saveDock(DeskWindow w) async {
+    if (w.id != kBuddyListId) return;
+    _buddyDock = w.dock;
+    final p = await SharedPreferences.getInstance();
+    await p.setString('buddyDock', w.dock.name);
+  }
+
+  void _openBuddyList() {
+    final fresh = !wm.isOpen(kBuddyListId);
+    wm.open(buddyListWindow(app.myScreenName));
+    if (fresh && _buddyDock != DockSide.none) wm.dockTo(kBuddyListId, _buddyDock);
   }
 
   final WindowManager wm;
@@ -37,7 +85,7 @@ class Desk {
 
   void openAim() {
     if (_online) {
-      wm.open(buddyListWindow(app.myScreenName));
+      _openBuddyList();
     } else {
       wm.open(signOnWindow());
     }
@@ -79,13 +127,24 @@ class Desk {
   void openExplorer([String? path]) => wm.open(explorerWindow(path: path));
   void openBrowser([String? url]) => wm.open(browserWindow(url: url));
   void openDownloads() => wm.open(downloadsWindow());
+  void openNetwork() => wm.open(networkWindow());
+  void openBluetooth() => wm.open(bluetoothWindow());
   void openRecycleBin() => openExplorer(kRecyclePath);
   Future<void> openMyDocuments() async {
     await Places.init();
     openExplorer(Places.documents);
   }
 
-  /// The always-on-top Local Hero remote, in the bottom-right corner.
+  /// The Media Player (0 = Now Playing, 1 = Music Library, 2 = Videos).
+  void openMediaPlayer({int tab = 0}) => wm.open(mediaPlayerWindow(tab: tab));
+
+  /// Plays a music or video file from the desktop in the Media Player.
+  Future<void> playFile(String path, {required bool video}) async {
+    await DeskPlayer.instance.playFile(path, video: video);
+    if (video || !wm.isOpen(kMiniPlayerId)) openMediaPlayer();
+  }
+
+  /// The always-on-top player remote, in the bottom-right corner.
   void openMiniPlayer() =>
       wm.open(miniPlayerWindow(), at: Offset(wm.desk.width - 372, wm.desk.height - 170));
 
@@ -132,7 +191,7 @@ class Desk {
         _seen[c.key] = c.lines.length;
       }
       wm.close(kSignOnId);
-      wm.open(buddyListWindow(app.myScreenName));
+      _openBuddyList();
     } else if (!app.signedOn && _wasOnline) {
       // Signed off (or signed on somewhere else): back to the Sign On window.
       _wasOnline = false;
@@ -218,11 +277,17 @@ class Desk {
       openRecycleBin();
     } else if (const {'iexplore', 'iexplore.exe', 'internet', 'browser', 'web'}.contains(lower)) {
       openBrowser();
+    } else if (const {'ncpa.cpl', 'wifi', 'wi-fi', 'wireless', 'network', 'networks'}.contains(lower)) {
+      openNetwork();
+    } else if (const {'bluetooth', 'bthprops.cpl', 'bt'}.contains(lower)) {
+      openBluetooth();
     } else if (lower == 'brave') {
       await openBrave();
     } else if (const {'downloads', 'my downloads'}.contains(lower)) {
       openDownloads();
-    } else if (const {'wmplayer', 'player', 'music', 'localhero', 'local hero', 'mini player'}.contains(lower)) {
+    } else if (const {'wmplayer', 'wmplayer.exe', 'player', 'media player', 'music', 'videos', 'video'}.contains(lower)) {
+      openMediaPlayer(tab: lower == 'videos' || lower == 'video' ? 2 : 1);
+    } else if (const {'mini player', 'miniplayer', 'localhero', 'local hero'}.contains(lower)) {
       openMiniPlayer();
     } else if (cmd.startsWith('/')) {
       if (FileSystemEntity.isDirectorySync(cmd)) {
