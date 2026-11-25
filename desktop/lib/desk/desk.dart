@@ -16,6 +16,7 @@ import 'explorer.dart';
 import 'media_player.dart';
 import 'mini_player.dart';
 import 'notepad.dart';
+import 'penis_music.dart';
 import 'session.dart';
 import 'solitaire.dart';
 import 'updater.dart';
@@ -200,6 +201,8 @@ class Desk {
   }
 
   /// The always-on-top player remote, in the bottom-right corner.
+  void openPenisMusic() => wm.open(penisMusicWindow());
+
   void openMiniPlayer() =>
       wm.open(miniPlayerWindow(), at: Offset(wm.desk.width - 372, wm.desk.height - 170));
 
@@ -342,6 +345,8 @@ class Desk {
       openDownloads();
     } else if (const {'wmplayer', 'wmplayer.exe', 'player', 'media player', 'music', 'videos', 'video', 'mixes', 'auto mixes'}.contains(lower)) {
       openMediaPlayer(tab: lower == 'videos' || lower == 'video' ? 2 : (lower.contains('mixes') ? 3 : 1));
+    } else if (const {'penis music', 'penismusic', 'penis'}.contains(lower)) {
+      openPenisMusic();
     } else if (const {'mini player', 'miniplayer', 'localhero', 'local hero'}.contains(lower)) {
       openMiniPlayer();
     } else if (cmd.startsWith('/')) {

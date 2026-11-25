@@ -16,6 +16,7 @@ import 'desk.dart';
 import 'explorer.dart' show confirmBox, promptBox;
 import 'media_library.dart';
 import 'mixes.dart';
+import 'penis_music.dart';
 import 'playlists.dart';
 import 'window_manager.dart';
 import 'xp_theme.dart';
@@ -31,6 +32,7 @@ class DeskPlayer extends ChangeNotifier {
   DeskPlayer._() {
     unawaited(_loadPrefs());
     unawaited(VisSettings.load());
+    PenisMusic.instance.attach(this);
     if (!kIsWeb && Platform.isAndroid) _LockScreenControls(this);
   }
   static final instance = DeskPlayer._();
@@ -61,6 +63,16 @@ class DeskPlayer extends ChangeNotifier {
   }
 
   bool get isVideo => current?.video ?? false;
+
+  /// Playback speed (Penis Music speeds songs up).
+  double rate = 1.0;
+
+  Future<void> setRate(double r) async {
+    rate = r;
+    try {
+      await controller?.setPlaybackSpeed(r);
+    } catch (_) {}
+  }
 
   /// The video fills the whole screen (above the taskbar).
   bool fullScreen = false;
@@ -210,6 +222,13 @@ class DeskPlayer extends ChangeNotifier {
     }
     controller = c;
     await c.setVolume(muted ? 0 : volume);
+    final r = m.video ? 1.0 : PenisMusic.instance.rateFor;
+    rate = r;
+    if (r != 1.0) {
+      try {
+        await c.setPlaybackSpeed(r);
+      } catch (_) {}
+    }
     c.addListener(_onTick);
     if (autoplay) await c.play();
     _startEvent(m);
@@ -603,7 +622,7 @@ class _PlayerWindowState extends State<_PlayerWindow> {
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
-      listenable: Listenable.merge([lib, player, lists, auto]),
+      listenable: Listenable.merge([lib, player, lists, auto, PenisMusic.instance]),
       builder: (c, _) {
         if (!_analyseStarted && lib.scanned && lib.songs.isNotEmpty) {
           _analyseStarted = true;
@@ -1802,6 +1821,18 @@ class _PlayerWindowState extends State<_PlayerWindow> {
             RoundButton(icon: Icons.fullscreen, tip: 'Full Screen (Ctrl+F)', onTap: () => p.setFullScreen(true)),
             const SizedBox(width: 6),
           ],
+          GestureDetector(
+            onSecondaryTap: () => context.read<Desk>().openPenisMusic(),
+            onLongPress: () => context.read<Desk>().openPenisMusic(),
+            child: RoundButton(
+                icon: Icons.celebration,
+                tip: PenisMusic.instance.on
+                    ? 'Penis Music: on (right-click for settings)'
+                    : 'Penis Music: off (right-click for settings)',
+                on: PenisMusic.instance.on,
+                onTap: PenisMusic.instance.toggle),
+          ),
+          const SizedBox(width: 6),
           RoundButton(icon: Icons.picture_in_picture_alt, tip: 'Switch to Mini Player (Ctrl+2)', onTap: _toMini),
           const SizedBox(width: 10),
           GestureDetector(

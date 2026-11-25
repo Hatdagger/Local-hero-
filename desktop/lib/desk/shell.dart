@@ -567,6 +567,7 @@ class _StartMenuState extends State<StartMenu> {
                   const XpMenuSeparator(),
                   leftItem(Icons.play_circle, const Color(0xFF3DAA4E), 'Media Player', 'music and videos', desk.openMediaPlayer),
                   leftItem(Icons.music_note, const Color(0xFFE07A1F), 'Mini Player', null, desk.openMiniPlayer),
+                  leftItem(Icons.celebration, const Color(0xFFD94F8C), 'Penis Music', 'live remixer', desk.openPenisMusic),
                   leftItem(Icons.description, const Color(0xFF4A6FB5), 'Notepad', null, desk.openNotepad),
                   leftItem(Icons.style, const Color(0xFF2E7D32), 'Solitaire', null, desk.openSolitaire),
                   const XpMenuSeparator(),

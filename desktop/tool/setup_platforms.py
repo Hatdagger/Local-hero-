@@ -40,7 +40,7 @@ def patch_android():
     pkg = m.group(1)
     folder = os.path.dirname(act)
     for name in ('MainActivity.kt', 'AimConnectionService.kt', 'DeskBridge.kt', 'SwitchWidget.kt',
-                 'UpdateRestartReceiver.kt', 'DeskMedia.kt', 'XpCursor.kt', 'DeskNet.kt', 'DeskLibrary.kt', 'DeskPlayback.kt', 'DeskSound.kt'):
+                 'UpdateRestartReceiver.kt', 'DeskMedia.kt', 'XpCursor.kt', 'DeskNet.kt', 'DeskLibrary.kt', 'DeskPlayback.kt', 'DeskSound.kt', 'DeskPenis.kt'):
         write(os.path.join(folder, name), read(os.path.join(OVERLAY, name)).replace('__PACKAGE__', pkg))
 
     res_src = os.path.join(OVERLAY, 'res')
