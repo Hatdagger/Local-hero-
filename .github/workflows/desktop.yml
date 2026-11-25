@@ -5,6 +5,9 @@ on:
     paths: ['desktop/**', '.github/workflows/desktop.yml']
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   android:
     runs-on: ubuntu-latest
@@ -29,9 +32,19 @@ jobs:
         run: flutter analyze --no-fatal-infos --no-fatal-warnings
       - name: Tests
         run: flutter test
-      - run: flutter build apk --release --build-number=${{ github.run_number }}
+      - run: flutter build apk --release --build-number=${{ github.run_number }} --dart-define=DESK_BUILD=${{ github.run_number }}
       - run: cp build/app/outputs/flutter-apk/app-release.apk ../ClassicDesk.apk
       - uses: actions/upload-artifact@v4
         with:
           name: ClassicDesk-apk
           path: ClassicDesk.apk
+      - name: Publish for in-app updates (release "desktop-latest")
+        if: github.ref == 'refs/heads/desktop' && github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "{\"build\": ${{ github.run_number }}, \"date\": \"$(date -u +%Y-%m-%d)\"}" > ../desk-version.json
+          gh release view desktop-latest -R "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
+            gh release create desktop-latest -R "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --prerelease \
+              --title "ClassicDesk (latest test build)" --notes "Newest ClassicDesk build. The desktop updates itself from here."
+          gh release upload desktop-latest ../ClassicDesk.apk ../desk-version.json --clobber -R "$GITHUB_REPOSITORY"

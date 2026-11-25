@@ -8,6 +8,7 @@ import 'app/settings.dart';
 import 'desk/desk.dart';
 import 'desk/platform.dart';
 import 'desk/shell.dart';
+import 'desk/updater.dart';
 import 'desk/wallpaper.dart';
 import 'desk/window_manager.dart';
 import 'desk/xp_theme.dart';
@@ -24,6 +25,7 @@ Future<void> main() async {
   final wm = WindowManager();
   final apps = AppList();
   final desk = Desk(wm, app, apps);
+  final updater = DeskUpdater()..start();
   await SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
 
   runApp(
@@ -35,6 +37,7 @@ Future<void> main() async {
         ChangeNotifierProvider.value(value: wallpaper),
         ChangeNotifierProvider.value(value: wm),
         ChangeNotifierProvider.value(value: apps),
+        ChangeNotifierProvider.value(value: updater),
         Provider.value(value: desk),
       ],
       child: const DeskApp(),

@@ -9,6 +9,7 @@ import '../oscar/client.dart';
 import 'desk.dart';
 import 'keys.dart';
 import 'platform.dart';
+import 'updater.dart';
 import 'wallpaper.dart';
 import 'window_manager.dart';
 import 'xp_theme.dart';
@@ -479,6 +480,7 @@ class _TrayState extends State<_Tray> {
   @override
   Widget build(BuildContext context) {
     final app = context.watch<AppState>();
+    final updater = context.watch<DeskUpdater>();
     final desk = context.read<Desk>();
     final now = TimeOfDay.now();
     final h = now.hourOfPeriod == 0 ? 12 : now.hourOfPeriod;
@@ -499,6 +501,16 @@ class _TrayState extends State<_Tray> {
         border: Border(left: BorderSide(color: Color(0xFF0A5FB0))),
       ),
       child: Row(children: [
+        if (updater.available) ...[
+          Tooltip(
+            message: 'Update ready: build ${updater.latestBuild}',
+            child: GestureDetector(
+              onTap: desk.openUpdate,
+              child: const Icon(Icons.new_releases, size: 17, color: Color(0xFFFFD000)),
+            ),
+          ),
+          const SizedBox(width: 10),
+        ],
         Tooltip(
           message: app.link == LinkState.online ? 'AIM: ${app.myScreenName}' : 'AIM: signed off',
           child: GestureDetector(
@@ -648,6 +660,7 @@ class _StartMenuState extends State<StartMenu> {
                 rightItem(Icons.settings, 'Android Settings', () => DeskPlatform.launch('com.android.settings')),
                 rightItem(Icons.home, 'Choose Home Screen', DeskPlatform.homeSettings),
                 rightItem(Icons.wallpaper, 'Wallpaper', desk.openDisplay),
+                rightItem(Icons.security_update_good, 'Desktop Update', desk.openUpdate),
               ]),
             ),
           ]),

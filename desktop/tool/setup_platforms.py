@@ -39,7 +39,8 @@ def patch_android():
     m = re.search(r'^package\s+([\w.]+)', read(act), re.M)
     pkg = m.group(1)
     folder = os.path.dirname(act)
-    for name in ('MainActivity.kt', 'AimConnectionService.kt', 'DeskBridge.kt', 'SwitchWidget.kt'):
+    for name in ('MainActivity.kt', 'AimConnectionService.kt', 'DeskBridge.kt', 'SwitchWidget.kt',
+                 'UpdateRestartReceiver.kt'):
         write(os.path.join(folder, name), read(os.path.join(OVERLAY, name)).replace('__PACKAGE__', pkg))
 
     res_src = os.path.join(OVERLAY, 'res')
@@ -61,6 +62,8 @@ def patch_android():
         'android.permission.WAKE_LOCK',
         'android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS',
         'android.permission.VIBRATE',
+        'android.permission.REQUEST_INSTALL_PACKAGES',  # in-app updates
+        'android.permission.UPDATE_PACKAGES_WITHOUT_USER_ACTION',  # later updates without a prompt (Android 12+)
     ]
     add = ''.join(f'    <uses-permission android:name="{p}"/>\n' for p in perms if p not in man)
     if add:
@@ -100,6 +103,12 @@ def patch_android():
             '            </intent-filter>\n'
             '            <meta-data android:name="android.appwidget.provider"\n'
             '                android:resource="@xml/desk_switch_widget_info"/>\n'
+            '        </receiver>\n'
+            f'        <receiver android:name="{pkg}.UpdateRestartReceiver"\n'
+            '            android:exported="false">\n'
+            '            <intent-filter>\n'
+            '                <action android:name="android.intent.action.MY_PACKAGE_REPLACED"/>\n'
+            '            </intent-filter>\n'
             '        </receiver>\n'
         )
         man = man.replace('    </application>', service + '    </application>', 1)

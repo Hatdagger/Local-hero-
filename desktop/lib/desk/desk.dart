@@ -11,6 +11,7 @@ import 'aim_windows.dart';
 import 'claude_window.dart';
 import 'notepad.dart';
 import 'solitaire.dart';
+import 'updater.dart';
 import 'platform.dart';
 import 'wallpaper.dart';
 import 'window_manager.dart';
@@ -70,6 +71,7 @@ class Desk {
   void openNotepad() => wm.open(notepadWindow());
   void openSolitaire() => wm.open(solitaireWindow());
   void openClaude() => wm.open(claudeWindow());
+  void openUpdate() => wm.open(updateWindow());
   void openRun() => wm.open(runWindow(), at: Offset(12, wm.desk.height - 200));
 
   void message(String title, String text, {IconData icon = Icons.error}) {
@@ -187,6 +189,8 @@ class Desk {
       openSolitaire();
     } else if (const {'claude', 'claude.ai'}.contains(lower)) {
       openClaude();
+    } else if (const {'update', 'wupdate', 'updates'}.contains(lower)) {
+      openUpdate();
     } else if (const {'logoff', 'shutdown'}.contains(lower)) {
       await logOff();
     } else if (_soon.contains(lower)) {
