@@ -40,7 +40,7 @@ def patch_android():
     pkg = m.group(1)
     folder = os.path.dirname(act)
     for name in ('MainActivity.kt', 'AimConnectionService.kt', 'DeskBridge.kt', 'SwitchWidget.kt',
-                 'UpdateRestartReceiver.kt'):
+                 'UpdateRestartReceiver.kt', 'DeskMedia.kt'):
         write(os.path.join(folder, name), read(os.path.join(OVERLAY, name)).replace('__PACKAGE__', pkg))
 
     res_src = os.path.join(OVERLAY, 'res')
@@ -64,8 +64,13 @@ def patch_android():
         'android.permission.VIBRATE',
         'android.permission.REQUEST_INSTALL_PACKAGES',  # in-app updates
         'android.permission.UPDATE_PACKAGES_WITHOUT_USER_ACTION',  # later updates without a prompt (Android 12+)
+        'android.permission.MANAGE_EXTERNAL_STORAGE',  # file browser: "All files access"
     ]
-    add = ''.join(f'    <uses-permission android:name="{p}"/>\n' for p in perms if p not in man)
+    add = ''.join(f'    <uses-permission android:name="{p}"/>\n' for p in perms if f'"{p}"' not in man)
+    # Older Android versions use the plain storage permissions instead.
+    for p, sdk in (('android.permission.WRITE_EXTERNAL_STORAGE', 29),):
+        if f'"{p}"' not in man:
+            add += f'    <uses-permission android:name="{p}" android:maxSdkVersion="{sdk}"/>\n'
     if add:
         man = man.replace('<application', add + '    <application', 1)
     man = re.sub(r'android:label="[^"]*"', f'android:label="{LABEL}"', man, count=1)
@@ -110,6 +115,14 @@ def patch_android():
             '                <action android:name="android.intent.action.MY_PACKAGE_REPLACED"/>\n'
             '            </intent-filter>\n'
             '        </receiver>\n'
+            f'        <service android:name="{pkg}.DeskMediaListener"\n'
+            '            android:label="ClassicDesk mini player"\n'
+            '            android:exported="true"\n'
+            '            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">\n'
+            '            <intent-filter>\n'
+            '                <action android:name="android.service.notification.NotificationListenerService"/>\n'
+            '            </intent-filter>\n'
+            '        </service>\n'
         )
         man = man.replace('    </application>', service + '    </application>', 1)
     write(man_p, man)

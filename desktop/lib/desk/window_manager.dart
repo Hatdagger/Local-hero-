@@ -18,6 +18,7 @@ class DeskWindow {
     this.canMinimize = true,
     this.onClose,
     this.beforeClose,
+    this.alwaysOnTop = false,
   }) : rect = Offset.zero & size;
 
   final String id;
@@ -35,6 +36,9 @@ class DeskWindow {
   final bool resizable;
   final bool canMaximize;
   final bool canMinimize;
+
+  /// Stays above ordinary windows (the mini player).
+  final bool alwaysOnTop;
 
   /// Runs after the window has closed.
   final VoidCallback? onClose;
@@ -84,7 +88,9 @@ class WindowManager extends ChangeNotifier {
   List<String>? _minimizedAll;
   int _cascade = 0;
 
-  List<DeskWindow> get zOrder => List.unmodifiable(_z);
+  /// Bottom to top, with always-on-top windows above the rest.
+  List<DeskWindow> get zOrder =>
+      List.unmodifiable([..._z.where((w) => !w.alwaysOnTop), ..._z.where((w) => w.alwaysOnTop)]);
   List<DeskWindow> get taskOrder => List.unmodifiable(_opened);
 
   DeskWindow? byId(String id) {

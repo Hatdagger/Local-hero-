@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -7,6 +8,8 @@ import 'package:provider/provider.dart';
 import '../app/app_state.dart';
 import '../oscar/client.dart';
 import 'desk.dart';
+import 'explorer.dart';
+import 'files.dart';
 import 'keys.dart';
 import 'platform.dart';
 import 'updater.dart';
@@ -55,8 +58,13 @@ class _DesktopShellState extends State<DesktopShell> {
       child: LayoutBuilder(builder: (context, box) {
         wm.desk = Size(box.maxWidth, box.maxHeight - kTaskbarHeight);
         final icons = <_IconSpec>[
+          _IconSpec('computer', 'My Computer', Icons.computer, const Color(0xFFDDE8FF), desk.openExplorer),
+          _IconSpec('docs', 'My Documents', Icons.folder_special, const Color(0xFFF2C75C), desk.openMyDocuments),
+          _IconSpec('recycle', 'Recycle Bin', Icons.delete_outline, const Color(0xFFDDE8FF), desk.openRecycleBin),
+          _IconSpec('internet', 'Internet', Icons.public, const Color(0xFF6FB8FF), () => desk.openBrowser()),
           _IconSpec('aim', 'Instant Messenger', Icons.chat_bubble, const Color(0xFFF5C400), desk.openAim),
           _IconSpec('claude', 'Claude', Icons.auto_awesome, const Color(0xFFE8875B), desk.openClaude),
+          _IconSpec('player', 'Local Hero', Icons.music_note, const Color(0xFFFFB04A), desk.openMiniPlayer),
           _IconSpec('notepad', 'Notepad', Icons.description, const Color(0xFFE6F0FF), desk.openNotepad),
           _IconSpec('solitaire', 'Solitaire', Icons.style, const Color(0xFFFFFFFF), desk.openSolitaire),
           _IconSpec('run', 'Run...', Icons.play_circle_fill, const Color(0xFFDDE8FF), desk.openRun),
@@ -82,11 +90,17 @@ class _DesktopShellState extends State<DesktopShell> {
             Positioned(
               left: 8 + (i ~/ perColumn) * 86.0,
               top: 10 + (i % perColumn) * 86.0,
-              child: _DesktopIcon(
-                spec: icons[i],
-                selected: _selectedIcon == icons[i].id,
-                onSelect: () => setState(() => _selectedIcon = icons[i].id),
-              ),
+              child: icons[i].id == 'recycle'
+                  ? _RecycleIcon(
+                      spec: icons[i],
+                      selected: _selectedIcon == icons[i].id,
+                      onSelect: () => setState(() => _selectedIcon = icons[i].id),
+                    )
+                  : _DesktopIcon(
+                      spec: icons[i],
+                      selected: _selectedIcon == icons[i].id,
+                      onSelect: () => setState(() => _selectedIcon = icons[i].id),
+                    ),
             ),
           // Windows, bottom to top
           Positioned(
@@ -200,6 +214,42 @@ class _IconSpec {
   final Color color;
   final VoidCallback open;
   _IconSpec(this.id, this.label, this.icon, this.color, this.open);
+}
+
+/// The Recycle Bin icon: shows when it has something in it, and takes files
+/// dragged out of an Explorer window.
+class _RecycleIcon extends StatelessWidget {
+  const _RecycleIcon({required this.spec, required this.selected, required this.onSelect});
+  final _IconSpec spec;
+  final bool selected;
+  final VoidCallback onSelect;
+
+  @override
+  Widget build(BuildContext context) {
+    final desk = context.read<Desk>();
+    return ListenableBuilder(
+      listenable: RecycleBin.instance,
+      builder: (c, _) {
+        final full = !RecycleBin.instance.isEmpty;
+        final s = _IconSpec(spec.id, spec.label, full ? Icons.delete : Icons.delete_outline, spec.color, spec.open);
+        return DragTarget<FileDrag>(
+          onWillAcceptWithDetails: (d) => d.data.from != kRecyclePath && d.data.from != kComputerPath,
+          onAcceptWithDetails: (d) async {
+            try {
+              await Places.init();
+              await RecycleBin.instance.recycle(d.data.paths);
+            } catch (e) {
+              desk.message('Recycle Bin', "Couldn't delete: ${e is FileSystemException ? e.message : e}");
+            }
+          },
+          builder: (c, cand, rej) => Container(
+            decoration: cand.isNotEmpty ? BoxDecoration(color: const Color(0x55316AC5), borderRadius: BorderRadius.circular(4)) : null,
+            child: _DesktopIcon(spec: s, selected: selected || cand.isNotEmpty, onSelect: onSelect),
+          ),
+        );
+      },
+    );
+  }
 }
 
 class _DesktopIcon extends StatelessWidget {
@@ -579,8 +629,8 @@ class _StartMenuState extends State<StartMenu> {
     }
 
     final menu = Container(
-      width: 400,
-      height: 470,
+      width: 410,
+      height: 530,
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: const BorderRadius.vertical(top: Radius.circular(8)),
@@ -623,9 +673,11 @@ class _StartMenuState extends State<StartMenu> {
               child: Padding(
                 padding: const EdgeInsets.all(6),
                 child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                  leftItem(Icons.public, const Color(0xFF1E7BD8), 'Internet', 'Desk Browser', () => desk.openBrowser()),
                   leftItem(Icons.chat_bubble, const Color(0xFFF5B800), 'Instant Messenger', 'AIM', desk.openAim),
                   leftItem(Icons.auto_awesome, const Color(0xFFE8875B), 'Claude', 'claude.ai', desk.openClaude),
                   const XpMenuSeparator(),
+                  leftItem(Icons.music_note, const Color(0xFFE07A1F), 'Local Hero', 'mini player', desk.openMiniPlayer),
                   leftItem(Icons.description, const Color(0xFF4A6FB5), 'Notepad', null, desk.openNotepad),
                   leftItem(Icons.style, const Color(0xFF2E7D32), 'Solitaire', null, desk.openSolitaire),
                   const XpMenuSeparator(),
@@ -657,6 +709,12 @@ class _StartMenuState extends State<StartMenu> {
               ),
               padding: const EdgeInsets.all(6),
               child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                rightItem(Icons.folder_special, 'My Documents', desk.openMyDocuments),
+                rightItem(Icons.computer, 'My Computer', () => desk.openExplorer()),
+                rightItem(Icons.download, 'Downloads', desk.openDownloads),
+                rightItem(Icons.delete_outline, 'Recycle Bin', desk.openRecycleBin),
+                const XpMenuSeparator(),
+                rightItem(Icons.shield, 'Brave', () => desk.openBrave()),
                 rightItem(Icons.settings, 'Android Settings', () => DeskPlatform.launch('com.android.settings')),
                 rightItem(Icons.home, 'Choose Home Screen', DeskPlatform.homeSettings),
                 rightItem(Icons.wallpaper, 'Wallpaper', desk.openDisplay),

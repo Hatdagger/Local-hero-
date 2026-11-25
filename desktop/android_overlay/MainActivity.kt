@@ -80,6 +80,7 @@ class MainActivity : FlutterActivity() {
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         DeskBridge.register(this, flutterEngine)
+        DeskMedia.register(this, flutterEngine)
         val ch = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "aim/platform")
         channel = ch
         val app = applicationContext

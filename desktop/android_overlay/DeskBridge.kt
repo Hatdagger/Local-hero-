@@ -1,7 +1,16 @@
 package __PACKAGE__
 
 import android.app.Activity
+import android.app.ActivityOptions
 import android.content.Intent
+import android.graphics.Rect
+import android.media.MediaScannerConnection
+import android.net.Uri
+import android.os.Build
+import android.os.Environment
+import android.os.storage.StorageManager
+import android.webkit.MimeTypeMap
+import java.io.File
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.Canvas
@@ -24,6 +33,7 @@ object DeskBridge {
     private val worker = Executors.newSingleThreadExecutor()
     private var channel: MethodChannel? = null
     private var metaAlone = false
+    @Volatile private var browserKeys = false
 
     fun register(activity: Activity, engine: FlutterEngine) {
         val ch = MethodChannel(engine.dartExecutor.binaryMessenger, "desk/platform")
@@ -51,6 +61,35 @@ object DeskBridge {
                         result.success(null)
                     }
                     "isDefaultHome" -> result.success(isDefaultHome(activity))
+                    "setBrowserKeys" -> {
+                        browserKeys = call.argument<Boolean>("on") ?: false
+                        result.success(null)
+                    }
+                    "hasAllFiles" -> result.success(hasAllFiles(activity))
+                    "askAllFiles" -> {
+                        askAllFiles(activity)
+                        result.success(null)
+                    }
+                    "storageRoot" -> result.success(Environment.getExternalStorageDirectory().absolutePath)
+                    "volumes" -> result.success(volumes(activity))
+                    "openWith" -> {
+                        val path = call.argument<String>("path") ?: ""
+                        val pkg = call.argument<String>("package")
+                        openWith(activity, path, pkg) { ok -> activity.runOnUiThread { result.success(ok) } }
+                    }
+                    "launchBounded" -> {
+                        result.success(launchBounded(
+                            activity,
+                            call.argument<String>("package") ?: "",
+                            call.argument<String>("url"),
+                            Rect(
+                                call.argument<Int>("left") ?: 0,
+                                call.argument<Int>("top") ?: 0,
+                                call.argument<Int>("right") ?: 0,
+                                call.argument<Int>("bottom") ?: 0,
+                            ),
+                        ))
+                    }
                     "shutdown" -> {
                         result.success(null)
                         shutdown(activity, call.argument<Boolean>("restart") ?: false)
@@ -106,12 +145,27 @@ object DeskBridge {
             }
         }
         if (e.isMetaPressed) metaAlone = false
+        if (browserKeys) {
+            val name = when {
+                e.isCtrlPressed && !e.isAltPressed && e.keyCode == KeyEvent.KEYCODE_T -> "ctrlT"
+                e.isCtrlPressed && !e.isAltPressed && e.keyCode == KeyEvent.KEYCODE_W -> "ctrlW"
+                e.isCtrlPressed && !e.isAltPressed && e.keyCode == KeyEvent.KEYCODE_L -> "ctrlL"
+                !e.isCtrlPressed && !e.isAltPressed && e.keyCode == KeyEvent.KEYCODE_F5 -> "f5"
+                e.isAltPressed && e.keyCode == KeyEvent.KEYCODE_DPAD_LEFT -> "altLeft"
+                e.isAltPressed && e.keyCode == KeyEvent.KEYCODE_DPAD_RIGHT -> "altRight"
+                else -> null
+            }
+            if (name != null) {
+                if (down && e.repeatCount == 0) send(name)
+                return true
+            }
+        }
         if (!down) {
             // Swallow the release of keys we handled.
             return (e.isAltPressed && (e.keyCode == KeyEvent.KEYCODE_TAB || e.keyCode == KeyEvent.KEYCODE_SPACE ||
                 e.keyCode == KeyEvent.KEYCODE_F4)) ||
                 (e.isMetaPressed && (e.keyCode == KeyEvent.KEYCODE_M || e.keyCode == KeyEvent.KEYCODE_D ||
-                    e.keyCode == KeyEvent.KEYCODE_R))
+                    e.keyCode == KeyEvent.KEYCODE_R || e.keyCode == KeyEvent.KEYCODE_E))
         }
         if (e.isAltPressed) {
             when (e.keyCode) {
@@ -125,6 +179,7 @@ object DeskBridge {
                 KeyEvent.KEYCODE_M -> { send("metaM", e.isShiftPressed); return true }
                 KeyEvent.KEYCODE_D -> { send("metaD"); return true }
                 KeyEvent.KEYCODE_R -> { send("metaR"); return true }
+                KeyEvent.KEYCODE_E -> { send("metaE"); return true }
             }
         }
         return false
@@ -153,6 +208,110 @@ object DeskBridge {
         android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
             android.os.Process.killProcess(android.os.Process.myPid())
         }, 400)
+    }
+
+    /** "All files access", which the file browser needs to see the whole device. */
+    private fun hasAllFiles(activity: Activity): Boolean =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            Environment.isExternalStorageManager()
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            activity.checkSelfPermission(android.Manifest.permission.WRITE_EXTERNAL_STORAGE) ==
+                PackageManager.PERMISSION_GRANTED
+        } else {
+            true
+        }
+
+    private fun askAllFiles(activity: Activity) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            try {
+                activity.startActivity(
+                    Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, Uri.parse("package:${activity.packageName}"))
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            } catch (e: Exception) {
+                activity.startActivity(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            }
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            activity.requestPermissions(arrayOf(
+                android.Manifest.permission.READ_EXTERNAL_STORAGE,
+                android.Manifest.permission.WRITE_EXTERNAL_STORAGE,
+            ), 52)
+        }
+    }
+
+    /** Internal storage, SD cards and USB drives: (name, folder). */
+    private fun volumes(activity: Activity): List<Map<String, Any>> {
+        val out = mutableListOf<Map<String, Any>>()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val sm = activity.getSystemService(StorageManager::class.java)
+            for (v in sm.storageVolumes) {
+                val dir = v.directory ?: continue
+                out.add(mapOf(
+                    "name" to v.getDescription(activity),
+                    "path" to dir.absolutePath,
+                    "removable" to v.isRemovable,
+                ))
+            }
+        }
+        if (out.isEmpty()) {
+            out.add(mapOf("name" to "Internal storage", "path" to Environment.getExternalStorageDirectory().absolutePath, "removable" to false))
+        }
+        return out
+    }
+
+    /**
+     * Opens a file in [pkg] (or lets the user choose an app when [pkg] is null
+     * or can't open it). Calls [done] with false if nothing could.
+     */
+    private fun openWith(activity: Activity, path: String, pkg: String?, done: (Boolean) -> Unit) {
+        val mime = MimeTypeMap.getSingleton().getMimeTypeFromExtension(File(path).extension.lowercase()) ?: "*/*"
+        MediaScannerConnection.scanFile(activity.applicationContext, arrayOf(path), arrayOf(mime)) { _, scanned ->
+            activity.runOnUiThread {
+                val uri = scanned ?: run { done(false); return@runOnUiThread }
+                val i = Intent(Intent.ACTION_VIEW).setDataAndType(uri, mime)
+                    .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+                if (pkg != null) {
+                    try {
+                        activity.startActivity(Intent(i).setPackage(pkg))
+                        done(true)
+                        return@runOnUiThread
+                    } catch (_: Exception) {}
+                }
+                try {
+                    activity.startActivity(Intent.createChooser(i, null).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                    done(true)
+                } catch (e: Exception) {
+                    done(false)
+                }
+            }
+        }
+    }
+
+    /**
+     * Starts another app (Brave) as a floating window over the desktop area.
+     * Android only honours the size when desktop / freeform windows are on.
+     */
+    private fun launchBounded(activity: Activity, pkg: String, url: String?, bounds: Rect): Boolean {
+        val i = if (url != null) {
+            Intent(Intent.ACTION_VIEW, Uri.parse(url)).setPackage(pkg)
+        } else {
+            activity.packageManager.getLaunchIntentForPackage(pkg)
+        } ?: return false
+        i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_MULTIPLE_TASK)
+        return try {
+            val opts = ActivityOptions.makeBasic()
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && bounds.width() > 0 && bounds.height() > 0) {
+                opts.setLaunchBounds(bounds)
+            }
+            activity.startActivity(i, opts.toBundle())
+            true
+        } catch (e: Exception) {
+            try {
+                activity.startActivity(i)
+                true
+            } catch (e2: Exception) {
+                false
+            }
+        }
     }
 
     fun openHomeSettings(activity: Activity) {

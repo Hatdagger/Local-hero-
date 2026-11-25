@@ -95,4 +95,19 @@ void main() {
     expect(r.width, 180);
     expect(r.height, 120);
   });
+
+  test('always-on-top windows stay above the others', () {
+    final wm = WindowManager();
+    wm.open(DeskWindow(
+      id: 'mini',
+      title: 'mini',
+      icon: const IconData(0xe000),
+      content: (c, w) => const SizedBox(),
+      alwaysOnTop: true,
+    ));
+    wm.open(win('a'));
+    wm.focus('a');
+    expect(wm.zOrder.last.id, 'mini');
+    expect(wm.activeId, 'a');
+  });
 }

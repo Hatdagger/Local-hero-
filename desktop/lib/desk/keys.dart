@@ -1,10 +1,11 @@
 import 'package:flutter/services.dart';
 
+import 'browser.dart';
 import 'desk.dart';
 import 'window_manager.dart';
 
 /// Desktop-wide keyboard shortcuts:
-/// Alt+Tab, Alt+Space, Alt+F4, Win, Win+M, Shift+Win+M, Win+D, Win+R.
+/// Alt+Tab, Alt+Space, Alt+F4, Win, Win+M, Shift+Win+M, Win+D, Win+R, Win+E.
 class DeskKeys {
   DeskKeys(this.desk);
   final Desk desk;
@@ -46,6 +47,12 @@ class DeskKeys {
       case 'metaR':
         wm.closeStart();
         desk.openRun();
+      case 'metaE':
+        wm.closeStart();
+        desk.openExplorer();
+      case 'ctrlT' || 'ctrlW' || 'ctrlL' || 'f5' || 'altLeft' || 'altRight':
+        final a = wm.activeId;
+        if (a != null) browserKeyHandlers[a]?.call(name);
     }
   }
 
@@ -144,6 +151,11 @@ class DeskKeys {
     }
     if (meta && key == LogicalKeyboardKey.keyD) {
       wm.showDesktop();
+      return true;
+    }
+    if (meta && key == LogicalKeyboardKey.keyE) {
+      wm.closeStart();
+      desk.openExplorer();
       return true;
     }
     if (meta && key == LogicalKeyboardKey.keyR) {

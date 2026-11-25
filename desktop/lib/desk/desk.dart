@@ -1,14 +1,17 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../app/app_state.dart';
-import '../app/platform_bridge.dart';
 import '../oscar/bytes.dart';
 import 'aim_windows.dart';
+import 'browser.dart';
 import 'claude_window.dart';
+import 'explorer.dart';
+import 'mini_player.dart';
 import 'notepad.dart';
 import 'solitaire.dart';
 import 'updater.dart';
@@ -73,6 +76,20 @@ class Desk {
   void openClaude() => wm.open(claudeWindow());
   void openUpdate() => wm.open(updateWindow());
   void openRun() => wm.open(runWindow(), at: Offset(12, wm.desk.height - 200));
+  void openExplorer([String? path]) => wm.open(explorerWindow(path: path));
+  void openBrowser([String? url]) => wm.open(browserWindow(url: url));
+  void openDownloads() => wm.open(downloadsWindow());
+  void openRecycleBin() => openExplorer(kRecyclePath);
+  Future<void> openMyDocuments() async {
+    await Places.init();
+    openExplorer(Places.documents);
+  }
+
+  /// The always-on-top Local Hero remote, in the bottom-right corner.
+  void openMiniPlayer() =>
+      wm.open(miniPlayerWindow(), at: Offset(wm.desk.width - 372, wm.desk.height - 170));
+
+  Future<void> openBrave([String? url]) => openBraveWindow(this, url: url);
 
   void message(String title, String text, {IconData icon = Icons.error}) {
     wm.open(DeskWindow(
@@ -148,7 +165,9 @@ class Desk {
     if (a == _lastActive) return;
     _lastActive = a;
     // Take the keyboard back from a web page when another window comes up.
-    if (a != kClaudeId) unawaited(DeskPlatform.focusDesktop());
+    final web = a == kClaudeId || isBrowserWindow(a);
+    if (!web) unawaited(DeskPlatform.focusDesktop());
+    unawaited(DeskPlatform.setBrowserKeys(isBrowserWindow(a)));
     final key = (a != null && a.startsWith('aim:im:')) ? a.substring(7) : null;
     if (app.openChat != key) scheduleMicrotask(() => app.openConversation(key));
   }
@@ -170,7 +189,7 @@ class Desk {
     await p.setStringList('runHistory', runHistory);
   }
 
-  static const _soon = {'explorer', 'iexplore', 'wmplayer', 'cmd', 'control', 'mspaint', 'calc'};
+  static const _soon = {'cmd', 'control', 'mspaint', 'calc'};
 
   /// Runs what was typed in the Run box. False if nothing matched (the box
   /// then stays open and an error shows).
@@ -191,6 +210,29 @@ class Desk {
       openClaude();
     } else if (const {'update', 'wupdate', 'updates'}.contains(lower)) {
       openUpdate();
+    } else if (const {'explorer', 'explorer.exe', 'my computer', 'computer', 'files', 'winfile'}.contains(lower)) {
+      openExplorer();
+    } else if (const {'my documents', 'documents'}.contains(lower)) {
+      await openMyDocuments();
+    } else if (const {'recycle bin', 'recycle', 'trash'}.contains(lower)) {
+      openRecycleBin();
+    } else if (const {'iexplore', 'iexplore.exe', 'internet', 'browser', 'web'}.contains(lower)) {
+      openBrowser();
+    } else if (lower == 'brave') {
+      await openBrave();
+    } else if (const {'downloads', 'my downloads'}.contains(lower)) {
+      openDownloads();
+    } else if (const {'wmplayer', 'player', 'music', 'localhero', 'local hero', 'mini player'}.contains(lower)) {
+      openMiniPlayer();
+    } else if (cmd.startsWith('/')) {
+      if (FileSystemEntity.isDirectorySync(cmd)) {
+        openExplorer(cmd);
+      } else if (FileSystemEntity.isFileSync(cmd)) {
+        await openFileOnDesk(this, cmd);
+      } else {
+        ok = false;
+        message('Run', "Cannot find '$cmd'. Make sure you typed the name correctly, and then try again.");
+      }
     } else if (lower == 'logoff') {
       await logOff();
     } else if (const {'shutdown', 'exit', 'quit'}.contains(lower)) {
@@ -200,7 +242,7 @@ class Desk {
           icon: Icons.info);
     } else if (_looksLikeUrl(cmd)) {
       final url = cmd.contains('://') ? cmd : 'https://$cmd';
-      await PlatformBridge.openUrl(url);
+      openBrowser(url);
     } else {
       await apps.load();
       final a = apps.find(cmd);

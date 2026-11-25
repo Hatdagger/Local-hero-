@@ -1,3 +1,5 @@
+import 'dart:ui' show Rect;
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
@@ -73,6 +75,86 @@ class DeskPlatform {
       return false;
     }
   }
+
+  /// Tells Android whether a browser window is active, so Ctrl+T/W/L, F5
+  /// and Alt+Left/Right are passed over while a web page has the keyboard.
+  static Future<void> setBrowserKeys(bool on) async {
+    try {
+      await _ch.invokeMethod('setBrowserKeys', {'on': on});
+    } catch (_) {}
+  }
+
+  /// Whether the file browser may see the whole device ("All files access").
+  static Future<bool> hasAllFiles() async {
+    try {
+      return await _ch.invokeMethod<bool>('hasAllFiles') ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Opens Android's "All files access" switch for the desktop.
+  static Future<void> askAllFiles() async {
+    try {
+      await _ch.invokeMethod('askAllFiles');
+    } catch (_) {}
+  }
+
+  static Future<String> storageRoot() async {
+    try {
+      return await _ch.invokeMethod<String>('storageRoot') ?? '/storage/emulated/0';
+    } catch (_) {
+      return '/storage/emulated/0';
+    }
+  }
+
+  /// Internal storage, SD cards, USB drives.
+  static Future<List<StorageVolume>> volumes() async {
+    try {
+      final raw = await _ch.invokeMethod<List<dynamic>>('volumes') ?? const [];
+      return raw.map((e) {
+        final m = Map<String, dynamic>.from(e as Map);
+        return StorageVolume(m['name'] as String? ?? 'Drive', m['path'] as String? ?? '/', m['removable'] as bool? ?? false);
+      }).toList();
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  /// Opens a file in another app: [package] if given (falls back to the
+  /// "Open with" chooser). False if nothing could open it.
+  static Future<bool> openWith(String path, {String? package}) async {
+    try {
+      return await _ch.invokeMethod<bool>('openWith', {'path': path, 'package': package}) ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Starts [package] as a floating window covering [bounds] (in screen
+  /// pixels). Only sized when Android's desktop / freeform windows are on.
+  static Future<bool> launchBounded(String package, {String? url, required Rect bounds}) async {
+    try {
+      return await _ch.invokeMethod<bool>('launchBounded', {
+            'package': package,
+            'url': url,
+            'left': bounds.left.round(),
+            'top': bounds.top.round(),
+            'right': bounds.right.round(),
+            'bottom': bounds.bottom.round(),
+          }) ??
+          false;
+    } catch (_) {
+      return false;
+    }
+  }
+}
+
+class StorageVolume {
+  final String name;
+  final String path;
+  final bool removable;
+  const StorageVolume(this.name, this.path, this.removable);
 }
 
 /// Installed Android apps, loaded once and refreshed when asked.

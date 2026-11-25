@@ -22,6 +22,10 @@ DeskWindow notepadWindow({String? path, String? name, String? content}) {
   );
 }
 
+/// Notepad with a file from anywhere on the device (from the file browser).
+DeskWindow notepadFileWindow(String path) =>
+    notepadWindow(path: path, name: path.substring(path.lastIndexOf('/') + 1));
+
 class _Notepad extends StatefulWidget {
   const _Notepad({required this.w, this.path, this.name, this.initial});
   final DeskWindow w;
@@ -298,7 +302,7 @@ class _NotepadState extends State<_Notepad> {
         height: 20,
         padding: const EdgeInsets.symmetric(horizontal: 6),
         alignment: Alignment.centerLeft,
-        child: Text(_status ?? (_path == null ? '' : 'My Documents\\$_name'),
+        child: Text(_status ?? (_path == null ? '' : (_path!.contains('/My Documents/') ? 'My Documents\\$_name' : _path!)),
             style: Xp.text.copyWith(fontSize: 11), maxLines: 1, overflow: TextOverflow.ellipsis),
       ),
     ]);
