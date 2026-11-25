@@ -40,7 +40,7 @@ def patch_android():
     pkg = m.group(1)
     folder = os.path.dirname(act)
     for name in ('MainActivity.kt', 'AimConnectionService.kt', 'DeskBridge.kt', 'SwitchWidget.kt',
-                 'UpdateRestartReceiver.kt', 'DeskMedia.kt', 'XpCursor.kt', 'DeskNet.kt', 'DeskLibrary.kt'):
+                 'UpdateRestartReceiver.kt', 'DeskMedia.kt', 'XpCursor.kt', 'DeskNet.kt', 'DeskLibrary.kt', 'DeskPlayback.kt'):
         write(os.path.join(folder, name), read(os.path.join(OVERLAY, name)).replace('__PACKAGE__', pkg))
 
     res_src = os.path.join(OVERLAY, 'res')
@@ -59,6 +59,7 @@ def patch_android():
         'android.permission.POST_NOTIFICATIONS',
         'android.permission.FOREGROUND_SERVICE',
         'android.permission.FOREGROUND_SERVICE_SPECIAL_USE',
+        'android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK',  # lock-screen media controls
         'android.permission.WAKE_LOCK',
         'android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS',
         'android.permission.VIBRATE',
@@ -135,6 +136,12 @@ def patch_android():
             '        </service>\n'
         )
         man = man.replace('    </application>', service + '    </application>', 1)
+    if 'DeskPlaybackService' not in man:
+        man = man.replace('    </application>',
+                          f'        <service android:name="{pkg}.DeskPlaybackService"\n'
+                          '            android:exported="false"\n'
+                          '            android:foregroundServiceType="mediaPlayback"/>\n'
+                          '    </application>', 1)
     write(man_p, man)
     patch_signing()
     print('android: patched', pkg)

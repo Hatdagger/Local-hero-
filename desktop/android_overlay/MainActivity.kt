@@ -98,6 +98,7 @@ class MainActivity : FlutterActivity() {
         DeskMedia.register(this, flutterEngine)
         DeskNet.register(this, flutterEngine)
         DeskLibrary.register(this, flutterEngine)
+        DeskPlayback.register(this, flutterEngine)
         val ch = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "aim/platform")
         channel = ch
         val app = applicationContext

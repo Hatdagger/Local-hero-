@@ -5,6 +5,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:video_player/video_player.dart';
@@ -23,6 +24,7 @@ enum Repeat { off, all, one }
 class DeskPlayer extends ChangeNotifier {
   DeskPlayer._() {
     unawaited(_loadPrefs());
+    if (!kIsWeb && Platform.isAndroid) _LockScreenControls(this);
   }
   static final instance = DeskPlayer._();
 
@@ -232,9 +234,13 @@ class DeskPlayer extends ChangeNotifier {
     await _load(autoplay: true);
   }
 
+  /// Goes up by one on every seek, so the lock screen can follow jumps.
+  int seekSerial = 0;
+
   Future<void> seek(Duration d) async {
     _ending = false;
     await controller?.seekTo(d);
+    seekSerial++;
     notifyListeners();
   }
 
@@ -1025,5 +1031,84 @@ class _PlayerWindowState extends State<_PlayerWindow> {
         ]),
       ]),
     );
+  }
+}
+
+/// Play, pause, skip and a seek bar on the lock screen and in the
+/// notification shade (also headphone and Bluetooth buttons), through an
+/// Android media session (DeskPlayback.kt). The notification also keeps music
+/// playing while the desktop is in the background.
+class _LockScreenControls {
+  _LockScreenControls(this.player) {
+    _ch.setMethodCallHandler(_onCall);
+    player.addListener(_changed);
+  }
+
+  final DeskPlayer player;
+  static const _ch = MethodChannel('desk/playback');
+  String _last = '';
+  bool _shown = false;
+  bool _dismissed = false;
+  bool _asked = false;
+
+  void _changed() {
+    final m = player.current;
+    final playing = player.playing;
+    if (playing) _dismissed = false;
+    if (m == null || _dismissed) {
+      if (_shown) {
+        _shown = false;
+        _last = '';
+        unawaited(_invoke('stop'));
+      }
+      return;
+    }
+    final dur = player.duration.inMilliseconds;
+    final sig = '${m.key}|$playing|$dur|${player.seekSerial}|${player.index}';
+    if (sig == _last) return;
+    _last = sig;
+    _shown = true;
+    if (!_asked && playing) {
+      _asked = true;
+      unawaited(_invoke('askNotifications'));
+    }
+    unawaited(_invoke('update', {
+      'title': m.title,
+      'artist': m.artist,
+      'album': m.album,
+      'playing': playing,
+      'position': player.position.inMilliseconds,
+      'duration': dur,
+      'uri': m.uri,
+      'path': m.path,
+    }));
+  }
+
+  Future<void> _invoke(String method, [Object? args]) async {
+    try {
+      await _ch.invokeMethod(method, args);
+    } catch (_) {}
+  }
+
+  Future<Object?> _onCall(MethodCall call) async {
+    if (call.method != 'action') return null;
+    final a = Map<String, Object?>.from(call.arguments as Map);
+    switch (a['name']) {
+      case 'play':
+        if (!player.playing) await player.toggle();
+      case 'pause':
+        if (player.playing) await player.pause();
+      case 'next':
+        await player.next();
+      case 'previous':
+        await player.previous();
+      case 'seek':
+        await player.seek(Duration(milliseconds: (a['ms'] as num?)?.toInt() ?? 0));
+      case 'stop':
+        await player.pause();
+        _dismissed = true;
+        _changed();
+    }
+    return null;
   }
 }
