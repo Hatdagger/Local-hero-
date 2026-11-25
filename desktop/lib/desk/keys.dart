@@ -1,7 +1,11 @@
+import 'dart:async';
+
 import 'package:flutter/services.dart';
 
 import 'browser.dart';
 import 'desk.dart';
+import 'media_player.dart';
+import 'mini_player.dart';
 import 'window_manager.dart';
 
 /// Desktop-wide keyboard shortcuts:
@@ -82,6 +86,42 @@ class DeskKeys {
     }
     if (!down) return false;
     if (meta) _metaAlone = false;
+
+    // Full-screen video: Esc / F11 / Ctrl+F leave, Space pauses, arrows skip 10 s.
+    final player = DeskPlayer.instance;
+    final ctrl = hk.isControlPressed;
+    if (player.fullScreen && player.isVideo) {
+      if (key == LogicalKeyboardKey.escape || key == LogicalKeyboardKey.f11 || (ctrl && key == LogicalKeyboardKey.keyF)) {
+        player.setFullScreen(false);
+        return true;
+      }
+      if (key == LogicalKeyboardKey.space) {
+        unawaited(player.toggle());
+        return true;
+      }
+      if (key == LogicalKeyboardKey.arrowLeft || key == LogicalKeyboardKey.arrowRight) {
+        final d = Duration(seconds: key == LogicalKeyboardKey.arrowLeft ? -10 : 10);
+        unawaited(player.seek(player.position + d < Duration.zero ? Duration.zero : player.position + d));
+        return true;
+      }
+      if (alt && key == LogicalKeyboardKey.tab) player.setFullScreen(false);
+    } else if ((ctrl && key == LogicalKeyboardKey.keyF) || key == LogicalKeyboardKey.f11) {
+      if (wm.activeId == kMediaPlayerId && player.isVideo) {
+        player.setFullScreen(true);
+        return true;
+      }
+    }
+    // Media Player: Ctrl+2 = mini player, Ctrl+1 (in the mini player) = full player.
+    if (ctrl && key == LogicalKeyboardKey.digit2 && wm.activeId == kMediaPlayerId) {
+      wm.close(kMediaPlayerId);
+      desk.openMiniPlayer();
+      return true;
+    }
+    if (ctrl && key == LogicalKeyboardKey.digit1 && wm.activeId == kMiniPlayerId) {
+      wm.close(kMiniPlayerId);
+      desk.openMediaPlayer();
+      return true;
+    }
 
     if (alt && key == LogicalKeyboardKey.tab) {
       if (wm.switcherIndex == null) {

@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:video_player/video_player.dart';
 
 import 'desk.dart';
 import 'media_player.dart';
@@ -56,6 +57,30 @@ class _MiniPlayerState extends State<_MiniPlayer> {
     }
   }
 
+  /// Back to the big Media Player (closes this one).
+  void _toFull() {
+    final desk = context.read<Desk>();
+    context.read<WindowManager>().close(kMiniPlayerId);
+    desk.openMediaPlayer();
+  }
+
+  /// Album art, or the video itself for videos.
+  Widget _art(MediaItem cur) {
+    final c = _p.controller;
+    if (cur.video && c != null && c.value.isInitialized) {
+      return Container(
+        width: 96,
+        height: 96,
+        color: Colors.black,
+        child: FittedBox(
+          fit: BoxFit.contain,
+          child: SizedBox(width: c.value.size.width, height: c.value.size.height, child: VideoPlayer(c)),
+        ),
+      );
+    }
+    return MediaArt(item: cur, size: 96);
+  }
+
   @override
   Widget build(BuildContext context) {
     final desk = context.read<Desk>();
@@ -86,7 +111,10 @@ class _MiniPlayerState extends State<_MiniPlayer> {
     return Padding(
       padding: const EdgeInsets.fromLTRB(8, 8, 8, 4),
       child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        GestureDetector(onDoubleTap: () => desk.openMediaPlayer(), child: MediaArt(item: cur, size: 96)),
+        GestureDetector(
+          onDoubleTap: cur.video ? () => _p.setFullScreen(true) : _toFull,
+          child: _art(cur),
+        ),
         const SizedBox(width: 10),
         Expanded(
           child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
@@ -104,10 +132,18 @@ class _MiniPlayerState extends State<_MiniPlayer> {
               const SizedBox(width: 6),
               RoundButton(icon: Icons.skip_next, tip: 'Next', onTap: _p.next),
               const Spacer(),
+              if (cur.video)
+                Tooltip(
+                  message: 'Full Screen',
+                  child: GestureDetector(
+                    onTap: () => _p.setFullScreen(true),
+                    child: const Padding(padding: EdgeInsets.all(3), child: Icon(Icons.fullscreen, size: 18)),
+                  ),
+                ),
               Tooltip(
-                message: 'Open the Media Player',
+                message: 'Switch to the full Media Player (Ctrl+1)',
                 child: GestureDetector(
-                  onTap: () => desk.openMediaPlayer(),
+                  onTap: _toFull,
                   child: const Padding(padding: EdgeInsets.all(3), child: Icon(Icons.open_in_new, size: 16)),
                 ),
               ),

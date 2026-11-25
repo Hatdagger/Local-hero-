@@ -22,6 +22,9 @@ object DeskLibrary {
     private val worker = Executors.newSingleThreadExecutor()
     private val artWorker = Executors.newFixedThreadPool(2)
 
+    /** Visualizer data for the song that's playing (its own thread so mixes don't hold it up). */
+    private val specWorker = Executors.newSingleThreadExecutor()
+
     /** One song at a time, at low priority, for Auto Mixes. */
     private val soundWorker = Executors.newSingleThreadExecutor { r ->
         Thread({
@@ -64,6 +67,13 @@ object DeskLibrary {
                     soundWorker.execute {
                         val f = try { DeskSound.analyze(activity, Uri.parse(uri), duration) } catch (e: Throwable) { null }
                         activity.runOnUiThread { result.success(f) }
+                    }
+                }
+                "spectrum" -> {
+                    val uri = call.argument<String>("uri") ?: ""
+                    specWorker.execute {
+                        val bytes = try { DeskSound.spectrum(activity, Uri.parse(uri)) } catch (e: Throwable) { null }
+                        activity.runOnUiThread { result.success(bytes) }
                     }
                 }
                 else -> result.notImplemented()

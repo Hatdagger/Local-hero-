@@ -6,6 +6,7 @@ import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -29,6 +30,7 @@ enum Repeat { off, all, one }
 class DeskPlayer extends ChangeNotifier {
   DeskPlayer._() {
     unawaited(_loadPrefs());
+    unawaited(VisSettings.load());
     if (!kIsWeb && Platform.isAndroid) _LockScreenControls(this);
   }
   static final instance = DeskPlayer._();
@@ -59,6 +61,48 @@ class DeskPlayer extends ChangeNotifier {
   }
 
   bool get isVideo => current?.video ?? false;
+
+  /// The video fills the whole screen (above the taskbar).
+  bool fullScreen = false;
+
+  void setFullScreen(bool on) {
+    if (on && !isVideo) return;
+    if (fullScreen == on) return;
+    fullScreen = on;
+    notifyListeners();
+  }
+
+  /// Spectrum of the current song for the visualizer: [kBands] values per
+  /// 1/30 s, worked out by DeskSound.kt when the song starts. Null until ready.
+  Uint8List? spectrum;
+  String? _spectrumKey;
+  static const kBands = 24;
+  static const kSpectrumFps = 30;
+
+  void _loadSpectrum(MediaItem m) {
+    if (m.video || m.uri.isEmpty || _spectrumKey == m.key) return;
+    _spectrumKey = m.key;
+    spectrum = null;
+    unawaited(() async {
+      Uint8List? bytes;
+      try {
+        bytes = await const MethodChannel('desk/library').invokeMethod<Uint8List>('spectrum', {'uri': m.uri});
+      } catch (_) {}
+      if (_spectrumKey != m.key) return;
+      spectrum = bytes;
+      notifyListeners();
+    }());
+  }
+
+  /// Band levels (0..1) at the current position, or null.
+  List<double>? bandsNow() {
+    final sp = spectrum;
+    if (sp == null || current?.video == true) return null;
+    final frames = sp.length ~/ kBands;
+    final f = (position.inMilliseconds * kSpectrumFps / 1000).floor();
+    if (f < 0 || f >= frames) return null;
+    return [for (var b = 0; b < kBands; b++) sp[f * kBands + b] / 255];
+  }
 
   Future<void> _loadPrefs() async {
     final p = await SharedPreferences.getInstance();
@@ -136,6 +180,8 @@ class DeskPlayer extends ChangeNotifier {
     notifyListeners();
     final m = current;
     if (m == null) return;
+    if (!m.video && fullScreen) fullScreen = false;
+    _loadSpectrum(m);
     final VideoPlayerController c;
     final opts = VideoPlayerOptions(allowBackgroundPlayback: !m.video, mixWithOthers: false);
     if (m.uri.isNotEmpty && !kIsWeb && Platform.isAndroid) {
@@ -525,6 +571,7 @@ class _PlayerWindowState extends State<_PlayerWindow> {
   Playlist? _list;
   Mix? _mix;
   bool _analyseStarted = false;
+  VisStyle _vis = VisSettings.style;
   bool _mouse = false;
   late _Tab _tab = _Tab.values[widget.startTab.clamp(0, 3)];
   GroupBy _group = GroupBy.songs;
@@ -969,6 +1016,35 @@ class _PlayerWindowState extends State<_PlayerWindow> {
     }
   }
 
+  Widget _visMenuButton() => Tooltip(
+        message: 'Visualization',
+        child: GestureDetector(
+          onTapDown: (d) async {
+            final v = await showMenu<VisStyle>(
+              context: context,
+              position: RelativeRect.fromLTRB(d.globalPosition.dx, d.globalPosition.dy, d.globalPosition.dx + 1,
+                  d.globalPosition.dy + 1),
+              items: [
+                for (final s in VisStyle.values)
+                  CheckedPopupMenuItem(value: s, checked: s == _vis, child: Text(s.label, style: Xp.text)),
+              ],
+            );
+            if (v != null) {
+              VisSettings.set(v);
+              setState(() => _vis = v);
+            }
+          },
+          child: const Padding(padding: EdgeInsets.all(4), child: Icon(Icons.equalizer, size: 18, color: Colors.white70)),
+        ),
+      );
+
+  /// Swaps the big player for the small always-on-top one.
+  void _toMini() {
+    final desk = context.read<Desk>();
+    context.read<WindowManager>().close(widget.w.id);
+    desk.openMiniPlayer();
+  }
+
   // ------------------------------------------------------------ now playing
 
   Widget _nowPlaying() {
@@ -980,13 +1056,20 @@ class _PlayerWindowState extends State<_PlayerWindow> {
     } else if (cur.video && c != null && c.value.isInitialized) {
       stage = GestureDetector(
         onTap: player.toggle,
-        onDoubleTap: () => context.read<WindowManager>().toggleMaximize(widget.w.id),
+        onDoubleTap: () => player.setFullScreen(true),
         child: Center(child: AspectRatio(aspectRatio: c.value.aspectRatio, child: VideoPlayer(c))),
       );
     } else {
-      stage = Center(
+      stage = Stack(children: [
+        if (_vis != VisStyle.off) Positioned.fill(child: Visualizer(player: player, style: _vis)),
+        Positioned(
+          right: 6,
+          top: 6,
+          child: _visMenuButton(),
+        ),
+        Center(
         child: Column(mainAxisSize: MainAxisSize.min, children: [
-          MediaArt(item: cur, size: 220),
+          Opacity(opacity: _vis == VisStyle.off ? 1 : 0.9, child: MediaArt(item: cur, size: _vis == VisStyle.off ? 220 : 160)),
           const SizedBox(height: 12),
           Text(cur.title, style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
           if (cur.subtitle.isNotEmpty) Text(cur.subtitle, style: const TextStyle(color: Colors.white70, fontSize: 13)),
@@ -996,7 +1079,8 @@ class _PlayerWindowState extends State<_PlayerWindow> {
               child: Text(player.error!, style: const TextStyle(color: Color(0xFFFF8A80))),
             ),
         ]),
-      );
+        ),
+      ]);
     }
     final showQueue = player.queue.length > 1 && !(cur?.video ?? false);
     return Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
@@ -1714,6 +1798,12 @@ class _PlayerWindowState extends State<_PlayerWindow> {
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis),
           ),
+          if (p.isVideo) ...[
+            RoundButton(icon: Icons.fullscreen, tip: 'Full Screen (Ctrl+F)', onTap: () => p.setFullScreen(true)),
+            const SizedBox(width: 6),
+          ],
+          RoundButton(icon: Icons.picture_in_picture_alt, tip: 'Switch to Mini Player (Ctrl+2)', onTap: _toMini),
+          const SizedBox(width: 10),
           GestureDetector(
             onTap: p.toggleMute,
             child: Icon(p.muted || p.volume == 0 ? Icons.volume_off : Icons.volume_up, size: 18, color: Colors.white),
@@ -1813,5 +1903,272 @@ class _LockScreenControls {
         _changed();
     }
     return null;
+  }
+}
+
+
+// ======================================================================
+// Visualizer
+
+enum VisStyle {
+  bars('Bars'),
+  mirror('Mirror'),
+  rings('Rings'),
+  off('None (album art)');
+
+  const VisStyle(this.label);
+  final String label;
+}
+
+class VisSettings {
+  static VisStyle style = VisStyle.bars;
+  static bool _loaded = false;
+
+  static Future<void> load() async {
+    if (_loaded) return;
+    _loaded = true;
+    final p = await SharedPreferences.getInstance();
+    style = VisStyle.values.firstWhere((v) => v.name == p.getString('visStyle'), orElse: () => VisStyle.bars);
+  }
+
+  static void set(VisStyle s) {
+    style = s;
+    unawaited(SharedPreferences.getInstance().then((p) => p.setString('visStyle', s.name)));
+  }
+}
+
+/// Bars that move with the music. The levels come from [DeskPlayer.bandsNow];
+/// they're smoothed here (quick rise, slower fall, with peak caps).
+class Visualizer extends StatefulWidget {
+  const Visualizer({super.key, required this.player, required this.style});
+  final DeskPlayer player;
+  final VisStyle style;
+
+  @override
+  State<Visualizer> createState() => _VisualizerState();
+}
+
+class _VisualizerState extends State<Visualizer> with SingleTickerProviderStateMixin {
+  late final Ticker _ticker;
+  final _levels = List<double>.filled(DeskPlayer.kBands, 0);
+  final _peaks = List<double>.filled(DeskPlayer.kBands, 0);
+  double _t = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _ticker = createTicker(_tick)..start();
+  }
+
+  void _tick(Duration d) {
+    final now = widget.player.playing ? widget.player.bandsNow() : null;
+    for (var i = 0; i < _levels.length; i++) {
+      final target = now?[i] ?? 0;
+      _levels[i] = target > _levels[i] ? _levels[i] + (target - _levels[i]) * 0.6 : _levels[i] * 0.88;
+      _peaks[i] = math.max(_peaks[i] - 0.008, _levels[i]);
+    }
+    _t = d.inMilliseconds / 1000;
+    setState(() {});
+  }
+
+  @override
+  void dispose() {
+    _ticker.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) =>
+      CustomPaint(painter: _VisPainter(widget.style, List.of(_levels), List.of(_peaks), _t), size: Size.infinite);
+}
+
+class _VisPainter extends CustomPainter {
+  _VisPainter(this.style, this.levels, this.peaks, this.t);
+  final VisStyle style;
+  final List<double> levels;
+  final List<double> peaks;
+  final double t;
+
+  static Color _hue(double x, double v) =>
+      HSVColor.fromAHSV(1, (200 - 160 * x + 360) % 360, 0.75, 0.55 + 0.45 * v).toColor();
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final n = levels.length;
+    switch (style) {
+      case VisStyle.off:
+        return;
+      case VisStyle.bars:
+        final w = size.width / n;
+        final base = size.height - 8;
+        final maxH = size.height * 0.85;
+        for (var i = 0; i < n; i++) {
+          final h = levels[i] * maxH;
+          final r = Rect.fromLTWH(i * w + 2, base - h, w - 4, h);
+          canvas.drawRect(
+              r,
+              Paint()
+                ..shader = LinearGradient(
+                        begin: Alignment.bottomCenter,
+                        end: Alignment.topCenter,
+                        colors: [const Color(0xFF2B55B8), _hue(i / n, levels[i])])
+                    .createShader(r));
+          final py = base - peaks[i] * maxH - 4;
+          canvas.drawRect(Rect.fromLTWH(i * w + 2, py, w - 4, 3), Paint()..color = Colors.white70);
+        }
+      case VisStyle.mirror:
+        final w = size.width / n;
+        final mid = size.height / 2;
+        for (var i = 0; i < n; i++) {
+          final h = levels[i] * size.height * 0.45;
+          final paint = Paint()..color = _hue(i / n, levels[i]).withValues(alpha: 0.85);
+          canvas.drawRRect(
+              RRect.fromRectAndRadius(Rect.fromLTWH(i * w + 3, mid - h, w - 6, h * 2), const Radius.circular(3)), paint);
+        }
+      case VisStyle.rings:
+        final c = size.center(Offset.zero);
+        final maxR = size.shortestSide * 0.48;
+        for (var i = n - 1; i >= 0; i--) {
+          final r = maxR * (0.25 + 0.75 * i / n) * (0.85 + 0.3 * levels[i]);
+          canvas.drawCircle(
+              c,
+              r,
+              Paint()
+                ..style = PaintingStyle.stroke
+                ..strokeWidth = 2 + 6 * levels[i]
+                ..color = _hue((i / n + t * 0.05) % 1, levels[i]).withValues(alpha: 0.35 + 0.6 * levels[i]));
+        }
+    }
+  }
+
+  @override
+  bool shouldRepaint(_VisPainter old) => true;
+}
+
+// ======================================================================
+// Full screen video
+
+/// Covers the whole screen (taskbar too) while [DeskPlayer.fullScreen] is on.
+/// Click = play/pause, double-click or Esc = back to the window. The controls
+/// show when the mouse moves.
+class FullScreenVideo extends StatefulWidget {
+  const FullScreenVideo({super.key});
+
+  @override
+  State<FullScreenVideo> createState() => _FullScreenVideoState();
+}
+
+class _FullScreenVideoState extends State<FullScreenVideo> {
+  final p = DeskPlayer.instance;
+  bool _controls = true;
+  Timer? _hide;
+
+  @override
+  void initState() {
+    super.initState();
+    p.addListener(_changed);
+  }
+
+  @override
+  void dispose() {
+    p.removeListener(_changed);
+    _hide?.cancel();
+    super.dispose();
+  }
+
+  bool _wasOn = false;
+
+  void _changed() {
+    if (!mounted) return;
+    final on = p.fullScreen && p.isVideo;
+    if (on && !_wasOn) _poke();
+    _wasOn = on;
+    setState(() {});
+  }
+
+  void _poke() {
+    _hide?.cancel();
+    if (!_controls) setState(() => _controls = true);
+    _hide = Timer(const Duration(seconds: 3), () {
+      if (mounted) setState(() => _controls = false);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = p.controller;
+    if (!p.fullScreen || !p.isVideo) return const SizedBox.shrink();
+    final cur = p.current;
+    return MouseRegion(
+      cursor: _controls ? SystemMouseCursors.basic : SystemMouseCursors.none,
+      onHover: (_) => _poke(),
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: () {
+          _poke();
+          p.toggle();
+        },
+        onDoubleTap: () => p.setFullScreen(false),
+        child: Container(
+          color: Colors.black,
+          child: Stack(children: [
+            if (c != null && c.value.isInitialized)
+              Center(child: AspectRatio(aspectRatio: c.value.aspectRatio, child: VideoPlayer(c))),
+            AnimatedPositioned(
+              duration: const Duration(milliseconds: 200),
+              left: 0,
+              right: 0,
+              bottom: _controls ? 0 : -110,
+              child: GestureDetector(
+                onTap: _poke,
+                onDoubleTap: () {},
+                child: Container(
+                  padding: const EdgeInsets.fromLTRB(16, 24, 16, 12),
+                  decoration: const BoxDecoration(
+                    gradient: LinearGradient(
+                        begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [Colors.transparent, Colors.black87]),
+                  ),
+                  child: Column(mainAxisSize: MainAxisSize.min, children: [
+                    SeekBar(player: p, light: true),
+                    Row(children: [
+                      RoundButton(icon: Icons.skip_previous, tip: 'Previous', onTap: p.previous),
+                      const SizedBox(width: 6),
+                      RoundButton(
+                          icon: p.playing ? Icons.pause : Icons.play_arrow,
+                          tip: p.playing ? 'Pause (Space)' : 'Play (Space)',
+                          size: 40,
+                          onTap: p.toggle),
+                      const SizedBox(width: 6),
+                      RoundButton(icon: Icons.skip_next, tip: 'Next', onTap: p.next),
+                      const SizedBox(width: 14),
+                      Expanded(
+                        child: Text(cur?.title ?? '',
+                            style: const TextStyle(color: Colors.white, fontSize: 14),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis),
+                      ),
+                      GestureDetector(
+                        onTap: p.toggleMute,
+                        child: Icon(p.muted || p.volume == 0 ? Icons.volume_off : Icons.volume_up,
+                            size: 20, color: Colors.white),
+                      ),
+                      SizedBox(
+                        width: 120,
+                        child: Slider(
+                            value: p.muted ? 0 : p.volume,
+                            onChanged: p.setVolume,
+                            activeColor: const Color(0xFF8FD14F)),
+                      ),
+                      RoundButton(
+                          icon: Icons.fullscreen_exit, tip: 'Exit Full Screen (Esc)', onTap: () => p.setFullScreen(false)),
+                    ]),
+                  ]),
+                ),
+              ),
+            ),
+          ]),
+        ),
+      ),
+    );
   }
 }

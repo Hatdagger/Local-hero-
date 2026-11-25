@@ -9,6 +9,7 @@ import '../oscar/client.dart';
 import 'desk.dart';
 import 'desktop_icons.dart';
 import 'keys.dart';
+import 'media_player.dart' show FullScreenVideo;
 import 'network.dart';
 import 'platform.dart';
 import 'updater.dart';
@@ -110,6 +111,8 @@ class _DesktopShellState extends State<DesktopShell> {
           Positioned(right: 8, bottom: kTaskbarHeight + 8, child: ToastStack(toasts: desk.toasts)),
           // Taskbar
           const Positioned(left: 0, right: 0, bottom: 0, height: kTaskbarHeight, child: Taskbar()),
+          // Full-screen video, over everything
+          const Positioned.fill(child: FullScreenVideo()),
         ]);
       }),
     );
