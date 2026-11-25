@@ -191,8 +191,10 @@ class Desk {
       openClaude();
     } else if (const {'update', 'wupdate', 'updates'}.contains(lower)) {
       openUpdate();
-    } else if (const {'logoff', 'shutdown'}.contains(lower)) {
+    } else if (lower == 'logoff') {
       await logOff();
+    } else if (const {'shutdown', 'exit', 'quit'}.contains(lower)) {
+      confirmShutDown();
     } else if (_soon.contains(lower)) {
       message('Not built yet', "'$cmd' isn't part of the desktop yet. It's coming in a later version.",
           icon: Icons.info);
@@ -256,6 +258,46 @@ class Desk {
                   wm.close(w.id);
                   unawaited(logOff());
                 }),
+            const SizedBox(width: 6),
+            XpButton(label: 'Cancel', onPressed: () => wm.close(w.id)),
+          ]),
+        ]),
+      ),
+    ));
+  }
+
+  // ------------------------------------------------------------ Shut Down
+
+  /// The "Turn off" box: Restart, Shut Down, Cancel.
+  void confirmShutDown() {
+    wm.closeStart();
+    Future<void> off({required bool restart}) async {
+      if (app.signedOn) await app.signOff();
+      await DeskPlatform.shutdown(restart: restart);
+    }
+
+    wm.open(DeskWindow(
+      id: 'shutdown',
+      title: 'Turn Off Desktop',
+      icon: Icons.power_settings_new,
+      size: const Size(380, 190),
+      resizable: false,
+      canMaximize: false,
+      canMinimize: false,
+      content: (c, w) => Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          const Text('What do you want to do?', style: Xp.textBold),
+          const SizedBox(height: 6),
+          const Text(
+              'Shut Down closes the desktop completely and signs off AIM. If the desktop is your home '
+              'screen, Android will ask which home screen to use.',
+              style: Xp.text),
+          const Spacer(),
+          Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+            XpButton(label: 'Restart', onPressed: () => unawaited(off(restart: true))),
+            const SizedBox(width: 6),
+            XpButton(label: 'Shut Down', isDefault: true, onPressed: () => unawaited(off(restart: false))),
             const SizedBox(width: 6),
             XpButton(label: 'Cancel', onPressed: () => wm.close(w.id)),
           ]),

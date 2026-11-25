@@ -59,6 +59,13 @@ class DeskPlatform {
     } catch (_) {}
   }
 
+  /// Closes the whole app (or restarts it).
+  static Future<void> shutdown({bool restart = false}) async {
+    try {
+      await _ch.invokeMethod('shutdown', {'restart': restart});
+    } catch (_) {}
+  }
+
   static Future<bool> isDefaultHome() async {
     try {
       return await _ch.invokeMethod<bool>('isDefaultHome') ?? false;

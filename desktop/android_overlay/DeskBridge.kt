@@ -51,6 +51,10 @@ object DeskBridge {
                         result.success(null)
                     }
                     "isDefaultHome" -> result.success(isDefaultHome(activity))
+                    "shutdown" -> {
+                        result.success(null)
+                        shutdown(activity, call.argument<Boolean>("restart") ?: false)
+                    }
                     "focusDesktop" -> {
                         val fv = activity.findViewById<View>(FlutterActivity.FLUTTER_VIEW_ID)
                         val cur = activity.currentFocus
@@ -124,6 +128,31 @@ object DeskBridge {
             }
         }
         return false
+    }
+
+    /**
+     * Shut Down: stops the AIM keep-alive service and ends the app's process.
+     * If the desktop is the home screen, Android's home picker opens first,
+     * otherwise Android would start the desktop again straight away.
+     * Restart: same, then the desktop starts again.
+     */
+    private fun shutdown(activity: Activity, restart: Boolean) {
+        try {
+            activity.stopService(Intent(activity, AimConnectionService::class.java))
+        } catch (_: Exception) {}
+        if (restart) {
+            val i = activity.packageManager.getLaunchIntentForPackage(activity.packageName)
+            if (i != null) {
+                i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
+                activity.startActivity(i)
+            }
+        } else if (isDefaultHome(activity)) {
+            openHomeSettings(activity)
+        }
+        activity.finishAndRemoveTask()
+        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+            android.os.Process.killProcess(android.os.Process.myPid())
+        }, 400)
     }
 
     fun openHomeSettings(activity: Activity) {

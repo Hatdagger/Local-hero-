@@ -673,23 +673,10 @@ class _StartMenuState extends State<StartMenu> {
             gradient: LinearGradient(colors: [Color(0xFF1F62D8), Color(0xFF3C8CF5), Color(0xFF1F62D8)]),
           ),
           child: Row(mainAxisAlignment: MainAxisAlignment.end, children: [
-            GestureDetector(
-              onTap: desk.confirmLogOff,
-              child: Row(children: [
-                Container(
-                  width: 24,
-                  height: 24,
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFF5A623),
-                    borderRadius: BorderRadius.circular(3),
-                    border: Border.all(color: Colors.white),
-                  ),
-                  child: const Icon(Icons.key, size: 16, color: Colors.white),
-                ),
-                const SizedBox(width: 6),
-                const Text('Log Off', style: TextStyle(color: Colors.white, fontSize: 13)),
-              ]),
-            ),
+            _BottomButton(icon: Icons.key, color: const Color(0xFFF5A623), label: 'Log Off', onTap: desk.confirmLogOff),
+            const SizedBox(width: 14),
+            _BottomButton(
+                icon: Icons.power_settings_new, color: const Color(0xFFD9441C), label: 'Shut Down', onTap: desk.confirmShutDown),
           ]),
         ),
       ]),
@@ -726,6 +713,35 @@ class _StartMenuState extends State<StartMenu> {
                 ]),
         ),
     ]);
+  }
+}
+
+class _BottomButton extends StatelessWidget {
+  const _BottomButton({required this.icon, required this.color, required this.label, required this.onTap});
+  final IconData icon;
+  final Color color;
+  final String label;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Row(children: [
+        Container(
+          width: 24,
+          height: 24,
+          decoration: BoxDecoration(
+            color: color,
+            borderRadius: BorderRadius.circular(3),
+            border: Border.all(color: Colors.white),
+          ),
+          child: Icon(icon, size: 16, color: Colors.white),
+        ),
+        const SizedBox(width: 6),
+        Text(label, style: const TextStyle(color: Colors.white, fontSize: 13)),
+      ]),
+    );
   }
 }
 
