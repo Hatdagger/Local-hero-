@@ -1,0 +1,30 @@
+name: classic_desk
+description: A classic-style desktop for Android tablets in desktop mode, with AIM built in.
+publish_to: 'none'
+version: 0.1.0+1
+
+environment:
+  sdk: '>=3.5.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  provider: ^6.1.2
+  crypto: ^3.0.3
+  shared_preferences: ^2.3.2
+  flutter_secure_storage: ^9.2.2
+  path_provider: ^2.1.4
+  audioplayers: ^6.1.0
+  file_picker: ^10.3.0
+  image: ^4.2.0
+  http: ^1.2.2
+  gamepads: ^0.1.14
+  flutter_webrtc: ^1.6.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true
