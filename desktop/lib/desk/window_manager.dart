@@ -17,6 +17,7 @@ class DeskWindow {
     this.canMaximize = true,
     this.canMinimize = true,
     this.onClose,
+    this.beforeClose,
   }) : rect = Offset.zero & size;
 
   final String id;
@@ -37,6 +38,10 @@ class DeskWindow {
 
   /// Runs after the window has closed.
   final VoidCallback? onClose;
+
+  /// Asked before closing; return false to keep the window open (for
+  /// example to ask "Save changes?" first).
+  bool Function()? beforeClose;
 
   /// Remembers which field inside the window had the keyboard.
   final FocusScopeNode focus = FocusScopeNode(debugLabel: 'window');
@@ -139,9 +144,13 @@ class WindowManager extends ChangeNotifier {
     return w;
   }
 
-  void close(String id) {
+  void close(String id, {bool force = false}) {
     final w = byId(id);
     if (w == null) return;
+    if (!force && w.beforeClose != null && !w.beforeClose!()) {
+      if (activeId != id) focus(id);
+      return;
+    }
     _z.remove(w);
     _opened.remove(w);
     _mru.remove(id);
@@ -158,8 +167,15 @@ class WindowManager extends ChangeNotifier {
 
   void closeWhere(bool Function(DeskWindow w) test) {
     for (final w in _z.where(test).toList()) {
-      close(w.id);
+      close(w.id, force: true);
     }
+  }
+
+  void setTitle(String id, String title) {
+    final w = byId(id);
+    if (w == null || w.title == title) return;
+    w.title = title;
+    notifyListeners();
   }
 
   // ------------------------------------------------------------ focus

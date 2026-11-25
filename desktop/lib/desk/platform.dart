@@ -41,6 +41,24 @@ class DeskPlatform {
     } catch (_) {}
   }
 
+  /// Shortcuts typed while a web page had the keyboard (see DeskBridge.kt).
+  static void listenForShortcuts(void Function(String name, bool shift) onShortcut) {
+    _ch.setMethodCallHandler((call) async {
+      if (call.method == 'shortcut') {
+        final m = Map<String, dynamic>.from(call.arguments as Map);
+        onShortcut(m['name'] as String? ?? '', m['shift'] as bool? ?? false);
+      }
+      return null;
+    });
+  }
+
+  /// Gives the keyboard back to the desktop (away from a web page).
+  static Future<void> focusDesktop() async {
+    try {
+      await _ch.invokeMethod('focusDesktop');
+    } catch (_) {}
+  }
+
   static Future<bool> isDefaultHome() async {
     try {
       return await _ch.invokeMethod<bool>('isDefaultHome') ?? false;

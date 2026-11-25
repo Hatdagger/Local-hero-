@@ -8,6 +8,9 @@ import '../app/app_state.dart';
 import '../app/platform_bridge.dart';
 import '../oscar/bytes.dart';
 import 'aim_windows.dart';
+import 'claude_window.dart';
+import 'notepad.dart';
+import 'solitaire.dart';
 import 'platform.dart';
 import 'wallpaper.dart';
 import 'window_manager.dart';
@@ -64,6 +67,9 @@ class Desk {
   void openAddBuddy() => wm.open(addBuddyWindow());
   void openSendIm() => wm.open(sendImWindow());
   void openDisplay() => wm.open(displayPropertiesWindow());
+  void openNotepad() => wm.open(notepadWindow());
+  void openSolitaire() => wm.open(solitaireWindow());
+  void openClaude() => wm.open(claudeWindow());
   void openRun() => wm.open(runWindow(), at: Offset(12, wm.desk.height - 200));
 
   void message(String title, String text, {IconData icon = Icons.error}) {
@@ -139,6 +145,8 @@ class Desk {
     final a = wm.activeId;
     if (a == _lastActive) return;
     _lastActive = a;
+    // Take the keyboard back from a web page when another window comes up.
+    if (a != kClaudeId) unawaited(DeskPlatform.focusDesktop());
     final key = (a != null && a.startsWith('aim:im:')) ? a.substring(7) : null;
     if (app.openChat != key) scheduleMicrotask(() => app.openConversation(key));
   }
@@ -160,7 +168,7 @@ class Desk {
     await p.setStringList('runHistory', runHistory);
   }
 
-  static const _soon = {'explorer', 'iexplore', 'wmplayer', 'notepad', 'cmd', 'control', 'mspaint', 'calc'};
+  static const _soon = {'explorer', 'iexplore', 'wmplayer', 'cmd', 'control', 'mspaint', 'calc'};
 
   /// Runs what was typed in the Run box. False if nothing matched (the box
   /// then stays open and an error shows).
@@ -173,6 +181,12 @@ class Desk {
       openAim();
     } else if (const {'desk.cpl', 'display', 'wallpaper', 'background'}.contains(lower)) {
       openDisplay();
+    } else if (const {'notepad', 'notepad.exe', 'edit'}.contains(lower)) {
+      openNotepad();
+    } else if (const {'sol', 'sol.exe', 'solitaire', 'cards'}.contains(lower)) {
+      openSolitaire();
+    } else if (const {'claude', 'claude.ai'}.contains(lower)) {
+      openClaude();
     } else if (const {'logoff', 'shutdown'}.contains(lower)) {
       await logOff();
     } else if (_soon.contains(lower)) {

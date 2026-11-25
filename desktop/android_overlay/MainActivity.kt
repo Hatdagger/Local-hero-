@@ -366,6 +366,12 @@ class MainActivity : FlutterActivity() {
         startActivity(i)
     }
 
+    /** Desktop shortcuts keep working while a web page has the keyboard. */
+    override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
+        if (DeskBridge.interceptKey(this, event)) return true
+        return super.dispatchKeyEvent(event)
+    }
+
     override fun onResume() {
         super.onResume()
         channel?.invokeMethod("resumed", null)

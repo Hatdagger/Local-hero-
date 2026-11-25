@@ -34,6 +34,7 @@ class _DesktopShellState extends State<DesktopShell> {
     super.initState();
     _keys = DeskKeys(context.read<Desk>());
     HardwareKeyboard.instance.addHandler(_keys.handle);
+    DeskPlatform.listenForShortcuts(_keys.external);
   }
 
   @override
@@ -54,9 +55,13 @@ class _DesktopShellState extends State<DesktopShell> {
         wm.desk = Size(box.maxWidth, box.maxHeight - kTaskbarHeight);
         final icons = <_IconSpec>[
           _IconSpec('aim', 'Instant Messenger', Icons.chat_bubble, const Color(0xFFF5C400), desk.openAim),
+          _IconSpec('claude', 'Claude', Icons.auto_awesome, const Color(0xFFE8875B), desk.openClaude),
+          _IconSpec('notepad', 'Notepad', Icons.description, const Color(0xFFE6F0FF), desk.openNotepad),
+          _IconSpec('solitaire', 'Solitaire', Icons.style, const Color(0xFFFFFFFF), desk.openSolitaire),
           _IconSpec('run', 'Run...', Icons.play_circle_fill, const Color(0xFFDDE8FF), desk.openRun),
           _IconSpec('display', 'Display Properties', Icons.desktop_windows, const Color(0xFFDDE8FF), desk.openDisplay),
         ];
+        final perColumn = ((wm.desk.height - 10) / 86).floor().clamp(1, 50);
         return Stack(children: [
           // Background (tap clears selection, right-click/long-press = menu)
           Positioned.fill(
@@ -74,8 +79,8 @@ class _DesktopShellState extends State<DesktopShell> {
           // Desktop icons
           for (var i = 0; i < icons.length; i++)
             Positioned(
-              left: 8,
-              top: 10 + i * 86.0,
+              left: 8 + (i ~/ perColumn) * 86.0,
+              top: 10 + (i % perColumn) * 86.0,
               child: _DesktopIcon(
                 spec: icons[i],
                 selected: _selectedIcon == icons[i].id,
@@ -607,6 +612,10 @@ class _StartMenuState extends State<StartMenu> {
                 padding: const EdgeInsets.all(6),
                 child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
                   leftItem(Icons.chat_bubble, const Color(0xFFF5B800), 'Instant Messenger', 'AIM', desk.openAim),
+                  leftItem(Icons.auto_awesome, const Color(0xFFE8875B), 'Claude', 'claude.ai', desk.openClaude),
+                  const XpMenuSeparator(),
+                  leftItem(Icons.description, const Color(0xFF4A6FB5), 'Notepad', null, desk.openNotepad),
+                  leftItem(Icons.style, const Color(0xFF2E7D32), 'Solitaire', null, desk.openSolitaire),
                   const XpMenuSeparator(),
                   leftItem(Icons.play_circle_fill, Xp.selection, 'Run...', null, desk.openRun),
                   leftItem(Icons.desktop_windows, Xp.selection, 'Display Properties', null, desk.openDisplay),

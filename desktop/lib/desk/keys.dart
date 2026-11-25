@@ -15,6 +15,40 @@ class DeskKeys {
   static bool _isAlt(LogicalKeyboardKey k) => k == LogicalKeyboardKey.altLeft || k == LogicalKeyboardKey.altRight;
   static bool _isMeta(LogicalKeyboardKey k) => k == LogicalKeyboardKey.metaLeft || k == LogicalKeyboardKey.metaRight;
 
+  /// The same shortcuts, passed over from Android while a web page has the
+  /// keyboard.
+  void external(String name, bool shift) {
+    switch (name) {
+      case 'altTab':
+        if (wm.switcherIndex == null) {
+          wm.startSwitch(back: shift);
+        } else {
+          wm.switchStep(back: shift);
+        }
+      case 'altUp':
+        if (wm.switcherIndex != null) wm.commitSwitch();
+      case 'altSpace':
+        final a = wm.active;
+        if (a != null) wm.openMenu(a.id);
+      case 'altF4':
+        final a = wm.active;
+        if (a != null) wm.close(a.id);
+      case 'meta':
+        wm.toggleStart();
+      case 'metaM':
+        if (shift) {
+          wm.undoMinimizeAll();
+        } else {
+          wm.minimizeAll();
+        }
+      case 'metaD':
+        wm.showDesktop();
+      case 'metaR':
+        wm.closeStart();
+        desk.openRun();
+    }
+  }
+
   bool handle(KeyEvent e) {
     final hk = HardwareKeyboard.instance;
     final key = e.logicalKey;

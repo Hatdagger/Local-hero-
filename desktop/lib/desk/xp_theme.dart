@@ -35,6 +35,12 @@ class Xp {
           cursorColor: Colors.black,
           selectionColor: Color(0xFF99B4E8),
         ),
+        popupMenuTheme: const PopupMenuThemeData(
+          color: Colors.white,
+          elevation: 3,
+          textStyle: text,
+          shape: RoundedRectangleBorder(side: BorderSide(color: Color(0xFFACA899))),
+        ),
         checkboxTheme: CheckboxThemeData(
           fillColor: WidgetStateProperty.resolveWith((s) => Colors.white),
           checkColor: WidgetStateProperty.all(const Color(0xFF21A121)),
@@ -270,3 +276,68 @@ class XpMenuSeparator extends StatelessWidget {
   Widget build(BuildContext context) =>
       Container(height: 1, margin: const EdgeInsets.symmetric(vertical: 3, horizontal: 2), color: const Color(0xFFACA899));
 }
+
+/// One entry in a window's menu bar menu. A null [onTap] greys it out;
+/// a null label is a separator line.
+class MenuBarEntry {
+  final String? label;
+  final VoidCallback? onTap;
+  final String? shortcut;
+  final bool checked;
+  const MenuBarEntry(this.label, this.onTap, {this.shortcut, this.checked = false});
+  const MenuBarEntry.separator()
+      : label = null,
+        onTap = null,
+        shortcut = null,
+        checked = false;
+}
+
+/// The File / Edit / ... strip under a window's title bar.
+class XpMenuBar extends StatelessWidget {
+  const XpMenuBar({super.key, required this.menus});
+  final List<(String, List<MenuBarEntry>)> menus;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      color: Xp.face,
+      padding: const EdgeInsets.symmetric(horizontal: 2),
+      child: Row(children: [
+        for (final (title, items) in menus)
+          PopupMenuButton<int>(
+            tooltip: '',
+            offset: const Offset(0, 22),
+            padding: EdgeInsets.zero,
+            onSelected: (i) => items[i].onTap?.call(),
+            itemBuilder: (_) => [
+              for (var i = 0; i < items.length; i++)
+                if (items[i].label == null)
+                  const PopupMenuDivider(height: 7)
+                else
+                  PopupMenuItem<int>(
+                    value: i,
+                    height: 28,
+                    enabled: items[i].onTap != null,
+                    child: SizedBox(
+                      width: 190,
+                      child: Row(children: [
+                        SizedBox(width: 18, child: items[i].checked ? const Icon(Icons.check, size: 15) : null),
+                        Expanded(
+                            child: Text(items[i].label!,
+                                style: _menuText.copyWith(color: items[i].onTap == null ? const Color(0xFFACA899) : null))),
+                        if (items[i].shortcut != null) Text(items[i].shortcut!, style: _menuText),
+                      ]),
+                    ),
+                  ),
+            ],
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+              child: Text(title, style: _menuText),
+            ),
+          ),
+      ]),
+    );
+  }
+}
+
+const _menuText = Xp.text;
