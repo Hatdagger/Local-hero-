@@ -4,13 +4,17 @@ import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:video_player/video_player.dart';
 
+import 'desk.dart';
+import 'explorer.dart' show confirmBox, promptBox;
 import 'media_library.dart';
+import 'playlists.dart';
 import 'window_manager.dart';
 import 'xp_theme.dart';
 
@@ -475,11 +479,20 @@ class _PlayerWindow extends StatefulWidget {
   State<_PlayerWindow> createState() => _PlayerWindowState();
 }
 
-enum _Tab { nowPlaying, library, videos }
+enum _Tab { nowPlaying, library, videos, playlist }
+
+/// Songs dragged from the library (with the mouse) onto a playlist.
+class _SongDrag {
+  final List<MediaItem> items;
+  const _SongDrag(this.items);
+}
 
 class _PlayerWindowState extends State<_PlayerWindow> {
   final lib = MediaLibrary.instance;
   final player = DeskPlayer.instance;
+  final lists = Playlists.instance;
+  Playlist? _list;
+  bool _mouse = false;
   late _Tab _tab = _Tab.values[widget.startTab.clamp(0, 2)];
   GroupBy _group = GroupBy.songs;
   Bucket? _bucket;
@@ -510,13 +523,22 @@ class _PlayerWindowState extends State<_PlayerWindow> {
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
-      listenable: Listenable.merge([lib, player]),
+      listenable: Listenable.merge([lib, player, lists]),
       builder: (c, _) {
+        if (_tab == _Tab.playlist && !lists.lists.contains(_list)) {
+          _tab = _Tab.library;
+          _list = null;
+        }
         final wm = context.read<WindowManager>();
         final cur = player.current;
         final title = cur == null ? 'Media Player' : '${cur.title} - Media Player';
         if (widget.w.title != title) scheduleMicrotask(() => wm.setTitle(widget.w.id, title));
-        return Container(
+        return Listener(
+          onPointerDown: (e) {
+            final m = e.kind == PointerDeviceKind.mouse;
+            if (m != _mouse) setState(() => _mouse = m);
+          },
+          child: Container(
           color: const Color(0xFF1D2B53),
           child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
             Expanded(
@@ -533,6 +555,7 @@ class _PlayerWindowState extends State<_PlayerWindow> {
                       _Tab.nowPlaying => _nowPlaying(),
                       _Tab.library => _library(),
                       _Tab.videos => _videos(),
+                      _Tab.playlist => _playlistView(_list!),
                     },
                   ),
                 ),
@@ -540,6 +563,7 @@ class _PlayerWindowState extends State<_PlayerWindow> {
             ),
             _transport(),
           ]),
+        ),
         );
       },
     );
@@ -551,7 +575,10 @@ class _PlayerWindowState extends State<_PlayerWindow> {
     Widget item(_Tab t, IconData icon, String label) {
       final on = _tab == t;
       return GestureDetector(
-        onTap: () => setState(() => _tab = t),
+        onTap: () => setState(() {
+          _tab = t;
+          _list = null;
+        }),
         child: Container(
           margin: const EdgeInsets.fromLTRB(6, 6, 6, 0),
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
@@ -578,7 +605,33 @@ class _PlayerWindowState extends State<_PlayerWindow> {
         item(_Tab.nowPlaying, Icons.graphic_eq, 'Now Playing'),
         item(_Tab.library, Icons.library_music, 'Music Library'),
         item(_Tab.videos, Icons.video_library, 'Videos'),
-        const Spacer(),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(10, 14, 6, 2),
+          child: Row(children: [
+            const Expanded(
+              child: Text('Playlists', style: TextStyle(color: Colors.white70, fontSize: 11, fontWeight: FontWeight.bold)),
+            ),
+            Tooltip(
+              message: 'New Playlist',
+              child: GestureDetector(
+                onTap: () => _newPlaylist(const []),
+                child: const Icon(Icons.add_box_outlined, size: 18, color: Colors.white),
+              ),
+            ),
+          ]),
+        ),
+        Expanded(
+          child: lists.lists.isEmpty
+              ? GestureDetector(
+                  onTap: () => _newPlaylist(const []),
+                  child: const Padding(
+                    padding: EdgeInsets.fromLTRB(12, 4, 8, 4),
+                    child: Text('Click + to make one, or right-click songs and pick Add to Playlist.',
+                        style: TextStyle(color: Colors.white54, fontSize: 11)),
+                  ),
+                )
+              : ListView(padding: EdgeInsets.zero, children: [for (final p in lists.lists) _sidebarList(p)]),
+        ),
         Padding(
           padding: const EdgeInsets.all(8),
           child: Text(
@@ -589,6 +642,291 @@ class _PlayerWindowState extends State<_PlayerWindow> {
         ),
       ]),
     );
+  }
+
+  Widget _sidebarList(Playlist p) {
+    final on = _tab == _Tab.playlist && _list == p;
+    return DragTarget<_SongDrag>(
+      onAcceptWithDetails: (d) => _addTo(p, d.data.items),
+      builder: (c, cand, rej) => GestureDetector(
+        onTap: () => setState(() {
+          _tab = _Tab.playlist;
+          _list = p;
+          _selected = null;
+        }),
+        onDoubleTap: () => _playList(p, shuffled: false),
+        onSecondaryTapUp: (d) => _listMenu(p, d.globalPosition),
+        onLongPressStart: (d) => _listMenu(p, d.globalPosition),
+        child: Container(
+          margin: const EdgeInsets.fromLTRB(6, 2, 6, 0),
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(4),
+            gradient: on ? const LinearGradient(colors: [Color(0xFF4F7BE0), Color(0xFF2B55B8)]) : null,
+            border: cand.isNotEmpty ? Border.all(color: Colors.white) : null,
+          ),
+          child: Row(children: [
+            const Icon(Icons.queue_music, size: 18, color: Colors.white),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(p.name,
+                  maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white, fontSize: 13)),
+            ),
+          ]),
+        ),
+      ),
+    );
+  }
+
+  // ------------------------------------------------------------ playlists
+
+  void _toast(String text) {
+    try {
+      context.read<Desk>().toasts.show(DeskToast(title: 'Media Player', text: text, icon: Icons.playlist_add));
+    } catch (_) {}
+  }
+
+  String _songs(int n) => n == 1 ? '1 song' : '$n songs';
+
+  void _addTo(Playlist p, List<MediaItem> items) {
+    final n = lists.add(p, items);
+    if (n == 0) {
+      _toast(items.length == 1 ? "It's already in '${p.name}'." : "They're already in '${p.name}'.");
+    } else {
+      _toast("Added ${_songs(n)} to '${p.name}'.");
+    }
+  }
+
+  void _newPlaylist(List<MediaItem> items, {String? name}) {
+    promptBox(context.read<WindowManager>(),
+        title: 'New Playlist',
+        text: items.isEmpty ? 'Name the new playlist:' : 'Name the new playlist (${_songs(items.length)}):',
+        initial: name ?? lists.freeName(),
+        okLabel: 'Create',
+        icon: Icons.queue_music, onOk: (v) {
+      final p = lists.create(v, items);
+      if (!mounted) return;
+      setState(() {
+        _tab = _Tab.playlist;
+        _list = p;
+        _selected = null;
+      });
+    });
+  }
+
+  /// Songs in [p], using the library's copies where it has them.
+  List<MediaItem> _itemsOf(Playlist p) {
+    if (!lib.scanned) return p.items;
+    final byKey = {for (final m in lib.songs) m.key: m, for (final m in lib.videos) m.key: m};
+    return PlaylistOps.refresh(p.items, byKey);
+  }
+
+  void _playList(Playlist p, {required bool shuffled, int start = 0}) {
+    final items = _itemsOf(p);
+    if (items.isEmpty) return;
+    unawaited(player.play(items, start, shuffled: shuffled));
+  }
+
+  Future<void> _listMenu(Playlist p, Offset at) async {
+    final v = await showMenu<String>(
+      context: context,
+      position: RelativeRect.fromLTRB(at.dx, at.dy, at.dx + 1, at.dy + 1),
+      items: [
+        PopupMenuItem(value: 'play', enabled: p.items.isNotEmpty, child: const Text('Play', style: Xp.textBold)),
+        PopupMenuItem(value: 'shuffle', enabled: p.items.isNotEmpty, child: const Text('Shuffle', style: Xp.text)),
+        PopupMenuItem(value: 'queue', enabled: p.items.isNotEmpty, child: const Text('Add to Now Playing', style: Xp.text)),
+        const PopupMenuDivider(height: 7),
+        const PopupMenuItem(value: 'rename', child: Text('Rename...', style: Xp.text)),
+        const PopupMenuItem(value: 'delete', child: Text('Delete', style: Xp.text)),
+      ],
+    );
+    switch (v) {
+      case 'play':
+        _playList(p, shuffled: false);
+      case 'shuffle':
+        _playList(p, shuffled: true);
+      case 'queue':
+        for (final m in _itemsOf(p)) {
+          player.addToQueue(m);
+        }
+      case 'rename':
+        _renameList(p);
+      case 'delete':
+        _deleteList(p);
+    }
+  }
+
+  void _renameList(Playlist p) => promptBox(context.read<WindowManager>(),
+      title: 'Rename Playlist',
+      text: 'New name for this playlist:',
+      initial: p.name,
+      icon: Icons.queue_music,
+      onOk: (v) => lists.rename(p, v));
+
+  void _deleteList(Playlist p) => confirmBox(context.read<WindowManager>(),
+      title: 'Delete Playlist',
+      text: "Delete the playlist '${p.name}'? The songs themselves stay on the tablet.",
+      icon: Icons.delete_outline,
+      onYes: () => lists.delete(p));
+
+  /// "Add to Playlist" entries for a song menu; values are 'pl:<n>' or 'pl:new'.
+  List<PopupMenuEntry<String>> _addMenuItems() => [
+        const PopupMenuDivider(height: 7),
+        for (var i = 0; i < lists.lists.length; i++)
+          PopupMenuItem(
+            value: 'pl:$i',
+            child: Text("Add to '${lists.lists[i].name}'",
+                style: Xp.text, maxLines: 1, overflow: TextOverflow.ellipsis),
+          ),
+        const PopupMenuItem(value: 'pl:new', child: Text('Add to New Playlist...', style: Xp.text)),
+      ];
+
+  /// Handles a value from [_addMenuItems]. True if it was one.
+  bool _handleAdd(String? v, List<MediaItem> items) {
+    if (v == null || !v.startsWith('pl:')) return false;
+    if (v == 'pl:new') {
+      _newPlaylist(items);
+    } else {
+      final i = int.tryParse(v.substring(3)) ?? -1;
+      if (i >= 0 && i < lists.lists.length) _addTo(lists.lists[i], items);
+    }
+    return true;
+  }
+
+  Future<void> _addMenuAt(Offset at, List<MediaItem> items) async {
+    final v = await showMenu<String>(
+      context: context,
+      position: RelativeRect.fromLTRB(at.dx, at.dy, at.dx + 1, at.dy + 1),
+      items: _addMenuItems().skip(1).toList(),
+    );
+    _handleAdd(v, items);
+  }
+
+  Widget _playlistView(Playlist p) {
+    final items = _itemsOf(p);
+    final cur = player.current?.key;
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      Container(
+        padding: const EdgeInsets.fromLTRB(10, 8, 8, 8),
+        color: const Color(0xFFF4F6FB),
+        child: Row(children: [
+          const Icon(Icons.queue_music, size: 36, color: Color(0xFF2B55B8)),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(p.name, style: Xp.textBold.copyWith(fontSize: 14), overflow: TextOverflow.ellipsis),
+              Text(
+                  items.isEmpty
+                      ? 'Empty'
+                      : '${_songs(items.length)}, ${LibraryOps.formatTime(items.fold(0, (t, m) => t + m.durationMs))}',
+                  style: Xp.textGrey.copyWith(fontSize: 11)),
+            ]),
+          ),
+          XpButton(label: 'Play All', onPressed: items.isEmpty ? null : () => _playList(p, shuffled: false)),
+          const SizedBox(width: 4),
+          XpButton(label: 'Shuffle', onPressed: items.isEmpty ? null : () => _playList(p, shuffled: true)),
+          const SizedBox(width: 4),
+          XpButton(label: 'Rename', onPressed: () => _renameList(p)),
+          const SizedBox(width: 4),
+          XpButton(label: 'Delete', onPressed: () => _deleteList(p)),
+        ]),
+      ),
+      Expanded(
+        child: items.isEmpty
+            ? const Center(
+                child: Padding(
+                  padding: EdgeInsets.all(16),
+                  child: Text(
+                      'This playlist is empty.\nIn the Music Library, right-click a song (or hold it) and pick '
+                      "Add to this playlist, or drag songs onto the playlist's name on the left.",
+                      textAlign: TextAlign.center,
+                      style: Xp.textGrey),
+                ),
+              )
+            : ReorderableListView.builder(
+                buildDefaultDragHandles: false,
+                itemCount: items.length,
+                onReorder: (from, to) => lists.move(p, from, to > from ? to - 1 : to),
+                itemBuilder: (c, i) {
+                  final m = items[i];
+                  final sel = _selected == 'pl:$i';
+                  final playing = cur == m.key;
+                  final style = Xp.text.copyWith(
+                      fontSize: 12,
+                      color: sel ? Colors.white : (playing ? const Color(0xFF0C32A4) : null),
+                      fontWeight: playing ? FontWeight.bold : null);
+                  return GestureDetector(
+                    key: ValueKey(m.key),
+                    onTap: () => setState(() => _selected = 'pl:$i'),
+                    onDoubleTap: () => _playList(p, shuffled: false, start: i),
+                    onSecondaryTapUp: (d) => _playlistSongMenu(p, items, i, d.globalPosition),
+                    onLongPressStart: (d) => _playlistSongMenu(p, items, i, d.globalPosition),
+                    child: Container(
+                      height: 26,
+                      color: sel ? Xp.selection : (i.isOdd ? const Color(0xFFF7F7F7) : Colors.white),
+                      child: Row(children: [
+                        ReorderableDragStartListener(
+                          index: i,
+                          child: MouseRegion(
+                            cursor: SystemMouseCursors.grab,
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(horizontal: 6),
+                              child: Icon(Icons.drag_indicator, size: 16, color: sel ? Colors.white70 : Colors.black38),
+                            ),
+                          ),
+                        ),
+                        SizedBox(width: 26, child: Text('${i + 1}', style: style)),
+                        Expanded(
+                            flex: 4,
+                            child: Text(m.title, style: style, maxLines: 1, overflow: TextOverflow.ellipsis)),
+                        Expanded(
+                            flex: 3,
+                            child: Text(m.artist, style: style, maxLines: 1, overflow: TextOverflow.ellipsis)),
+                        SizedBox(
+                          width: 50,
+                          child: Text(m.durationMs > 0 ? LibraryOps.formatTime(m.durationMs) : '', style: style),
+                        ),
+                      ]),
+                    ),
+                  );
+                },
+              ),
+      ),
+    ]);
+  }
+
+  Future<void> _playlistSongMenu(Playlist p, List<MediaItem> items, int i, Offset at) async {
+    setState(() => _selected = 'pl:$i');
+    final v = await showMenu<String>(
+      context: context,
+      position: RelativeRect.fromLTRB(at.dx, at.dy, at.dx + 1, at.dy + 1),
+      items: [
+        const PopupMenuItem(value: 'play', child: Text('Play', style: Xp.textBold)),
+        const PopupMenuItem(value: 'next', child: Text('Play Next', style: Xp.text)),
+        const PopupMenuItem(value: 'queue', child: Text('Add to Now Playing', style: Xp.text)),
+        const PopupMenuDivider(height: 7),
+        PopupMenuItem(value: 'up', enabled: i > 0, child: const Text('Move Up', style: Xp.text)),
+        PopupMenuItem(value: 'down', enabled: i < items.length - 1, child: const Text('Move Down', style: Xp.text)),
+        const PopupMenuItem(value: 'remove', child: Text('Remove from Playlist', style: Xp.text)),
+      ],
+    );
+    switch (v) {
+      case 'play':
+        _playList(p, shuffled: false, start: i);
+      case 'next':
+        player.playNext(items[i]);
+      case 'queue':
+        player.addToQueue(items[i]);
+      case 'up':
+        lists.move(p, i, i - 1);
+        setState(() => _selected = 'pl:${i - 1}');
+      case 'down':
+        lists.move(p, i, i + 1);
+        setState(() => _selected = 'pl:${i + 1}');
+      case 'remove':
+        lists.removeAt(p, i);
+        setState(() => _selected = null);
+    }
   }
 
   // ------------------------------------------------------------ now playing
@@ -628,9 +966,24 @@ class _PlayerWindowState extends State<_PlayerWindow> {
           width: 250,
           color: const Color(0xFF101830),
           child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-            const Padding(
-              padding: EdgeInsets.all(8),
-              child: Text('Up next', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(8, 6, 6, 6),
+              child: Row(children: [
+                const Expanded(
+                  child: Text('Up next', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                ),
+                Tooltip(
+                  message: 'Save this list as a playlist',
+                  child: GestureDetector(
+                    onTap: () => _newPlaylist(player.queue, name: lists.freeName('Now Playing')),
+                    child: const Row(children: [
+                      Icon(Icons.playlist_add, size: 16, color: Colors.white70),
+                      SizedBox(width: 2),
+                      Text('Save', style: TextStyle(color: Colors.white70, fontSize: 11)),
+                    ]),
+                  ),
+                ),
+              ]),
             ),
             Expanded(
               child: ListView.builder(
@@ -673,11 +1026,13 @@ class _PlayerWindowState extends State<_PlayerWindow> {
     final v = await showMenu<String>(
       context: context,
       position: RelativeRect.fromLTRB(at.dx, at.dy, at.dx + 1, at.dy + 1),
-      items: const [
-        PopupMenuItem(value: 'play', child: Text('Play', style: Xp.textBold)),
-        PopupMenuItem(value: 'remove', child: Text('Remove from list', style: Xp.text)),
+      items: [
+        const PopupMenuItem(value: 'play', child: Text('Play', style: Xp.textBold)),
+        const PopupMenuItem(value: 'remove', child: Text('Remove from list', style: Xp.text)),
+        ..._addMenuItems(),
       ],
     );
+    if (i < player.queue.length && _handleAdd(v, [player.queue[i]])) return;
     if (v == 'play') unawaited(player.jump(i));
     if (v == 'remove') player.removeAt(i);
   }
@@ -792,6 +1147,17 @@ class _PlayerWindowState extends State<_PlayerWindow> {
             XpButton(label: 'Play All', onPressed: () => player.play(_bucket!.items, 0, shuffled: false)),
             const SizedBox(width: 4),
             XpButton(label: 'Shuffle', onPressed: () => player.play(_bucket!.items, 0, shuffled: true)),
+            const SizedBox(width: 4),
+            Builder(
+              builder: (bc) => XpButton(
+                label: 'Add to Playlist',
+                minWidth: 100,
+                onPressed: () {
+                  final box = bc.findRenderObject() as RenderBox;
+                  _addMenuAt(box.localToGlobal(Offset(0, box.size.height)), _bucket!.items);
+                },
+              ),
+            ),
           ]),
         ),
       Expanded(child: body),
@@ -871,7 +1237,24 @@ class _PlayerWindowState extends State<_PlayerWindow> {
                     child: Text(t, style: style, maxLines: 1, overflow: TextOverflow.ellipsis),
                   ),
                 );
-            return GestureDetector(
+            return Draggable<_SongDrag>(
+              data: _SongDrag([m]),
+              maxSimultaneousDrags: _mouse ? 1 : 0,
+              dragAnchorStrategy: pointerDragAnchorStrategy,
+              onDragStarted: () => setState(() => _selected = m.key),
+              feedback: Material(
+                color: Colors.transparent,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  color: const Color(0xCC316AC5),
+                  child: Row(mainAxisSize: MainAxisSize.min, children: [
+                    const Icon(Icons.music_note, size: 14, color: Colors.white),
+                    const SizedBox(width: 4),
+                    Text(m.title, style: const TextStyle(color: Colors.white, fontSize: 12)),
+                  ]),
+                ),
+              ),
+              child: GestureDetector(
               onTap: () => setState(() => _selected = m.key),
               onDoubleTap: () => player.play(list, i),
               onSecondaryTapUp: (d) => _songMenu(list, i, d.globalPosition),
@@ -885,6 +1268,7 @@ class _PlayerWindowState extends State<_PlayerWindow> {
                   cell(m.durationMs > 0 ? LibraryOps.formatTime(m.durationMs) : '', flex: 1),
                 ]),
               ),
+            ),
             );
           },
         ),
@@ -898,12 +1282,14 @@ class _PlayerWindowState extends State<_PlayerWindow> {
     final v = await showMenu<String>(
       context: context,
       position: RelativeRect.fromLTRB(at.dx, at.dy, at.dx + 1, at.dy + 1),
-      items: const [
-        PopupMenuItem(value: 'play', child: Text('Play', style: Xp.textBold)),
-        PopupMenuItem(value: 'next', child: Text('Play Next', style: Xp.text)),
-        PopupMenuItem(value: 'queue', child: Text('Add to Now Playing', style: Xp.text)),
+      items: [
+        const PopupMenuItem(value: 'play', child: Text('Play', style: Xp.textBold)),
+        const PopupMenuItem(value: 'next', child: Text('Play Next', style: Xp.text)),
+        const PopupMenuItem(value: 'queue', child: Text('Add to Now Playing', style: Xp.text)),
+        ..._addMenuItems(),
       ],
     );
+    if (_handleAdd(v, [m])) return;
     switch (v) {
       case 'play':
         unawaited(player.play(list, i));

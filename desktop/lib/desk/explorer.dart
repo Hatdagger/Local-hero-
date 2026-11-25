@@ -1919,6 +1919,50 @@ void confirmBox(WindowManager wm,
   ));
 }
 
+/// A small box asking for a name (or other short text).
+void promptBox(WindowManager wm,
+    {required String title,
+    required String text,
+    String initial = '',
+    String okLabel = 'OK',
+    IconData icon = Icons.edit,
+    required void Function(String value) onOk}) {
+  final ctl = TextEditingController(text: initial)
+    ..selection = TextSelection(baseOffset: 0, extentOffset: initial.length);
+  wm.open(DeskWindow(
+    id: 'prompt:${DateTime.now().microsecondsSinceEpoch}',
+    title: title,
+    icon: icon,
+    size: const Size(380, 150),
+    resizable: false,
+    canMaximize: false,
+    canMinimize: false,
+    content: (c, w) {
+      void ok() {
+        final v = ctl.text.trim();
+        if (v.isEmpty) return;
+        wm.close(w.id);
+        onOk(v);
+      }
+
+      return Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          Text(text, style: Xp.text),
+          const SizedBox(height: 8),
+          XpField(controller: ctl, autofocus: true, onSubmitted: (_) => ok()),
+          const Spacer(),
+          Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+            XpButton(label: okLabel, isDefault: true, onPressed: ok),
+            const SizedBox(width: 6),
+            XpButton(label: 'Cancel', onPressed: () => wm.close(w.id)),
+          ]),
+        ]),
+      );
+    },
+  ));
+}
+
 class FileProps {
   final String path;
   final String name;
